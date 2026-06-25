@@ -1,4 +1,4 @@
-# Projeto de Dados Telefonicos
+# Caracterização de uma Rede Telefônica Urbana por Métodos de Redes Complexas
 
 Este repositorio organiza uma analise exploratoria inicial de dados telefonicos com foco em usuarios residentes em Lavras.
 
