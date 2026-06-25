@@ -6,11 +6,19 @@ Este repositorio organiza uma analise exploratoria inicial de dados telefonicos 
 
 - `Lavras.parquet`: base principal ja agregada por emissor residente em Lavras. Cada linha representa um emissor e contem totais de chamadas, quantidade de receptores distintos e listas com informacoes por receptor.
 - `residencias.csv`: base grande de residencias dos usuarios, com cidade e quintis socioeconomicos. Por ser um arquivo de quase 1 GB, o notebook trabalha com amostras e leitura em partes.
-- `eda.ipynb`: notebook documentado com analises exploratorias, checagens de qualidade e sugestoes de proximos passos.
+- `1-eda.ipynb`: notebook documentado com analises exploratorias e checagens de qualidade.
+- `2-rede-complexa.ipynb`: construcao inicial da rede, metricas basicas, comunidades e estrutura geografica.
+- `3-analises-avancadas.py`: analises direcionadas e ponderadas, centralidades, homofilia, distancia, comunidades, small-world, nucleo-periferia, robustez, cauda dos graus e backbone. O script usa celulas `# %%` e gera resultados em `resultados/analises_avancadas/`.
 
 ## Como executar
 
-Abra `eda.ipynb` no Jupyter Notebook, JupyterLab ou VS Code e execute as celulas em ordem.
+Abra os notebooks no Jupyter Notebook, JupyterLab ou VS Code e execute as celulas em ordem.
+
+Para executar todas as analises avancadas:
+
+```powershell
+python 3-analises-avancadas.py
+```
 
 Dependencias usadas no notebook:
 
