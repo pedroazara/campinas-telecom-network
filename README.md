@@ -18,6 +18,9 @@ dados de residência e quintis socioeconômicos dos usuários.
   comunidades, decaimento da comunicação com a distância, homofilia socioeconômica por quintil e
   rede agregada de fluxo entre antenas. Tem um *setup* que reconstrói a rede a partir dos parquets,
   então roda de forma independente.
+- `4-analises-avancadas.ipynb` — **métricas estruturais de redes complexas**: ajuste de lei de
+  potência (rede livre de escala), assortatividade de grau e decomposição em k-core, análise
+  small-world (vs. grafo aleatório) e robustez a ataques/falhas. Também roda de forma independente.
 
 ## Dados (`dados/`)
 
@@ -31,9 +34,10 @@ dados de residência e quintis socioeconômicos dos usuários.
 ## Como executar
 
 Abra os notebooks no Jupyter/JupyterLab/VS Code com o ambiente `sistemas-complexos` e execute as
-células em ordem. Os notebooks `2-rede-complexa.ipynb` e `3-analise-espacial.ipynb` dependem apenas
-dos parquets pequenos (`edges_antenna.parquet` + `antennas.parquet`) e podem ser rodados de forma
-independente; o `1-eda.ipynb` precisa de `residencias.csv` na etapa final.
+células em ordem. Os notebooks `2-rede-complexa.ipynb`, `3-analise-espacial.ipynb` e
+`4-analises-avancadas.ipynb` dependem apenas dos parquets pequenos (`edges_antenna.parquet` +
+`antennas.parquet`) e podem ser rodados de forma independente; o `1-eda.ipynb` precisa de
+`residencias.csv` na etapa final.
 
 Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`, `geopandas`,
 `shapely`, `scipy`, `contextily` (este baixa o mapa de fundo, exige internet).
@@ -58,6 +62,12 @@ Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`
 - **Decaimento da intensidade de chamadas com a distância residencial.**
 - **Homofilia socioeconômica por quintil (observado vs. modelo nulo) e matriz de mistura.**
 - **Rede agregada entre antenas: fluxo de chamadas entre regiões da cidade.**
+
+**Análises avançadas (`4-analises-avancadas.ipynb`)**
+- **Ajuste de lei de potência** da distribuição de grau (rede livre de escala?).
+- **Assortatividade de grau** e **decomposição em k-core** (núcleo-periferia).
+- **Small-world**: clustering e caminho médio vs. grafo aleatório equivalente (coeficiente σ).
+- **Robustez**: fragmentação da rede sob ataque dirigido vs. falha aleatória.
 
 ## Próximos passos sugeridos
 
