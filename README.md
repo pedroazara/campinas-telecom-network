@@ -1,51 +1,59 @@
 # Caracterização de uma Rede Telefônica Urbana por Métodos de Redes Complexas
 
-Este repositorio organiza uma analise exploratoria inicial de dados telefonicos com foco em usuarios residentes em Lavras.
+Este repositório caracteriza a rede telefônica urbana da cidade de **Campinas (SP)** usando
+métodos de redes complexas, partindo de uma base de chamadas agregada por emissor e cruzando com
+dados de residência e quintis socioeconômicos dos usuários.
 
-## Arquivos
+## Estrutura
 
-- `Lavras.parquet`: base principal ja agregada por emissor residente em Lavras. Cada linha representa um emissor e contem totais de chamadas, quantidade de receptores distintos e listas com informacoes por receptor.
-- `residencias.csv`: base grande de residencias dos usuarios, com cidade e quintis socioeconomicos. Por ser um arquivo de quase 1 GB, o notebook trabalha com amostras e leitura em partes.
-- `1-eda.ipynb`: notebook documentado com analises exploratorias e checagens de qualidade.
-- `2-rede-complexa.ipynb`: construcao inicial da rede, metricas basicas, comunidades e estrutura geografica.
-- `3-analises-avancadas.py`: analises direcionadas e ponderadas, centralidades, homofilia, distancia, comunidades, small-world, nucleo-periferia, robustez, cauda dos graus e backbone. O script usa celulas `# %%` e gera resultados em `resultados/analises_avancadas/`.
+- `1-eda.ipynb` — análise exploratória da base `Campinas.parquet`: estrutura e qualidade dos dados,
+  comportamento dos emissores, volume e concentração de chamadas (Pareto, CCDF), distância
+  residencial das arestas, e construção/exportação da tabela de arestas emissor-receptor. Ao final,
+  cruza com `residencias.csv` para gerar as tabelas por antena (`edges_antenna.parquet`,
+  `antennas.parquet`), restritas a Campinas.
+- `2-rede-complexa.ipynb` — construção da rede e análise de redes complexas: distribuição de grau,
+  CCDF, componentes conexas, clustering, **centralidades e hubs**, comunidades (Louvain) e toda a
+  estrutura espacial e socioeconômica da rede sobre o mapa de Campinas.
+
+## Dados (`dados/`)
+
+- `Campinas.parquet` — base principal agregada por emissor residente em Campinas. Cada linha é um
+  emissor, com totais de chamadas e listas por receptor (IDs, nº de chamadas, distância, duração).
+- `residencias.csv` — base de residências dos usuários (~1 GB), com cidade e quintis
+  socioeconômicos. Não versionada (ver `.gitignore`); usada apenas no fim do `1-eda.ipynb`.
+- `edges_antenna.parquet` / `antennas.parquet` — saídas do `1-eda.ipynb` consumidas pelo
+  `2-rede-complexa.ipynb`.
 
 ## Como executar
 
-Abra os notebooks no Jupyter Notebook, JupyterLab ou VS Code e execute as celulas em ordem.
+Abra os notebooks no Jupyter/JupyterLab/VS Code com o ambiente `sistemas-complexos` e execute as
+células em ordem. O `2-rede-complexa.ipynb` depende apenas dos parquets pequenos
+(`edges_antenna.parquet` + `antennas.parquet`); o `1-eda.ipynb` precisa de `residencias.csv` na
+etapa final.
 
-Para executar todas as analises avancadas:
+Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`, `geopandas`,
+`shapely`, `scipy`, `contextily` (este baixa o mapa de fundo, exige internet).
 
-```powershell
-python 3-analises-avancadas.py
-```
+## Análises incluídas
 
-Dependencias usadas no notebook:
+**EDA (`1-eda.ipynb`)**
+- Dicionário e checagens de qualidade (nulos, duplicados, consistência das listas internas).
+- Distribuições de chamadas, receptores distintos e duração; Pareto e CCDF.
+- Distância residencial das arestas e concentração de contatos por emissor.
+- Verificação dos nós sem localização e construção das tabelas por antena.
 
-- `pandas`
-- `numpy`
-- `pyarrow`
-- `plotly`
-- `networkx`
+**Rede complexa (`2-rede-complexa.ipynb`)**
+- Grafo não-direcionado ponderado, densidade, distribuição de grau e CCDF.
+- Componentes conexas e componente gigante; clustering.
+- **Centralidades (grau, força, intermediação, autovetor) e identificação de hubs.**
+- Comunidades por Louvain e sua distribuição espacial por antena.
+- Estrutura geográfica sobre o mapa de Campinas: scatter de antenas, Voronoi por quintil.
+- **Decaimento da intensidade de chamadas com a distância residencial.**
+- **Homofilia socioeconômica por quintil (observado vs. modelo nulo) e matriz de mistura.**
+- **Rede agregada entre antenas: fluxo de chamadas entre regiões da cidade.**
 
-Observacao sobre o ambiente local: durante a inspecao apareceu incompatibilidade entre `numpy` 2.x e alguns pacotes compilados opcionais (`matplotlib`, `numexpr` e `bottleneck`). Por isso, o notebook usa `plotly.graph_objects` para visualizacao e bloqueia os opcionais problemáticos antes de importar `pandas`.
+## Próximos passos sugeridos
 
-## Analises incluidas
-
-- Dicionario de dados e estrutura do parquet.
-- Checagens de qualidade: nulos, duplicados, consistencia entre `unique_receivers` e listas de receptores.
-- Estatisticas descritivas de chamadas e contatos.
-- Distribuicoes de chamadas, receptores distintos e duracao.
-- Pareto de emissores por volume de chamadas.
-- Expansao das listas do parquet para uma tabela de arestas emissor-receptor.
-- Analise de distancia das chamadas e duracao total.
-- Analise de concentracao de contatos por emissor.
-- Rede direcionada emissor-receptor com metricas basicas de grau.
-- Amostra da base `residencias.csv` para distribuicao de cidades e quintis.
-
-## Proximos passos sugeridos
-
-- Filtrar a base de residencias para conectar os quintis aos emissores e receptores do parquet.
-- Criar metricas temporais, caso exista uma base com timestamps das chamadas.
-- Comparar Lavras com outras cidades, se houver parquets equivalentes.
-- Avaliar comunidades na rede quando houver maior cobertura de ligacoes entre usuarios observados.
+- Comparar Campinas com outras cidades, se houver parquets equivalentes.
+- Incorporar métricas temporais, caso exista base com timestamps das chamadas.
+- Aprofundar a relação entre homofilia socioeconômica e segregação espacial.
