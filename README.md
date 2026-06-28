@@ -11,9 +11,13 @@ dados de residência e quintis socioeconômicos dos usuários.
   residencial das arestas, e construção/exportação da tabela de arestas emissor-receptor. Ao final,
   cruza com `residencias.csv` para gerar as tabelas por antena (`edges_antenna.parquet`,
   `antennas.parquet`), restritas a Campinas.
-- `2-rede-complexa.ipynb` — construção da rede e análise de redes complexas: distribuição de grau,
-  CCDF, componentes conexas, clustering, **centralidades e hubs**, comunidades (Louvain) e toda a
-  estrutura espacial e socioeconômica da rede sobre o mapa de Campinas.
+- `2-rede-complexa.ipynb` — **topologia** da rede: construção do grafo, densidade, distribuição de
+  grau e CCDF, componentes conexas, clustering, **centralidades e hubs** e comunidades (Louvain).
+- `3-analise-espacial.ipynb` — **estrutura espacial e socioeconômica** sobre o mapa de Campinas:
+  localização das antenas, diagrama de Voronoi, visualização da rede, distribuição espacial das
+  comunidades, decaimento da comunicação com a distância, homofilia socioeconômica por quintil e
+  rede agregada de fluxo entre antenas. Tem um *setup* que reconstrói a rede a partir dos parquets,
+  então roda de forma independente.
 
 ## Dados (`dados/`)
 
@@ -27,9 +31,9 @@ dados de residência e quintis socioeconômicos dos usuários.
 ## Como executar
 
 Abra os notebooks no Jupyter/JupyterLab/VS Code com o ambiente `sistemas-complexos` e execute as
-células em ordem. O `2-rede-complexa.ipynb` depende apenas dos parquets pequenos
-(`edges_antenna.parquet` + `antennas.parquet`); o `1-eda.ipynb` precisa de `residencias.csv` na
-etapa final.
+células em ordem. Os notebooks `2-rede-complexa.ipynb` e `3-analise-espacial.ipynb` dependem apenas
+dos parquets pequenos (`edges_antenna.parquet` + `antennas.parquet`) e podem ser rodados de forma
+independente; o `1-eda.ipynb` precisa de `residencias.csv` na etapa final.
 
 Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`, `geopandas`,
 `shapely`, `scipy`, `contextily` (este baixa o mapa de fundo, exige internet).
@@ -42,12 +46,15 @@ Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`
 - Distância residencial das arestas e concentração de contatos por emissor.
 - Verificação dos nós sem localização e construção das tabelas por antena.
 
-**Rede complexa (`2-rede-complexa.ipynb`)**
+**Topologia da rede (`2-rede-complexa.ipynb`)**
 - Grafo não-direcionado ponderado, densidade, distribuição de grau e CCDF.
 - Componentes conexas e componente gigante; clustering.
 - **Centralidades (grau, força, intermediação, autovetor) e identificação de hubs.**
-- Comunidades por Louvain e sua distribuição espacial por antena.
+- Comunidades por Louvain e modularidade.
+
+**Análise espacial (`3-analise-espacial.ipynb`)**
 - Estrutura geográfica sobre o mapa de Campinas: scatter de antenas, Voronoi por quintil.
+- Distribuição espacial das comunidades por antena e mapa de hubs.
 - **Decaimento da intensidade de chamadas com a distância residencial.**
 - **Homofilia socioeconômica por quintil (observado vs. modelo nulo) e matriz de mistura.**
 - **Rede agregada entre antenas: fluxo de chamadas entre regiões da cidade.**
