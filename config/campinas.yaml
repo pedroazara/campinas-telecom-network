@@ -1,0 +1,12 @@
+# Configuração da cidade de Campinas (SP).
+# Para adicionar outra cidade, copie este arquivo e ajuste os caminhos.
+
+city: campinas
+city_name: "Campinas"   # valor exato da coluna residence_city em residencias.csv
+
+data:
+  parquet_path: "./dados/Campinas.parquet"
+  residencias_path: "./dados/residencias.csv"
+  edges_path: "./dados/campinas_edges.csv"
+  edges_antenna_path: "./dados/campinas_edges_antenna.parquet"
+  antennas_path: "./dados/campinas_antennas.parquet"

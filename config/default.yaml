@@ -1,0 +1,32 @@
+# Configuração padrão do pipeline (pode ser sobrescrita por config/<cidade>.yaml).
+
+graph:
+  weighted: true
+  directed: false
+  weight_formula: "log1p(q_calls) * log1p(calls_duration_total)"
+  remove_self_loops: true
+
+analyses:
+  eda: true
+  topology: true
+  spatial: true
+  advanced: true
+
+output:
+  base_dir: "./output"
+  save_figures: true
+  save_data: true
+  save_report: true
+  figure_format: "png"
+  figure_dpi: 150
+
+spatial:
+  download_basemap: true   # contextily — requer internet
+  voronoi: true
+  network_map_communities: 12   # nº de maiores comunidades no recorte da rede sobre o mapa
+
+advanced:
+  robustness_steps: 50
+  betweenness_sample_k: 500
+  powerlaw_xmin_auto: true
+  shortest_path_sample: 500   # nós-fonte amostrados no caminho médio (small-world)

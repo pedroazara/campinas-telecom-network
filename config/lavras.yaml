@@ -1,0 +1,14 @@
+# Configuração da cidade de Lavras (MG).
+# Exemplo de segunda cidade: basta este arquivo apontar para os dados corretos.
+# Os parquets por antena são gerados pelo módulo de EDA a partir de residencias.csv.
+
+city: lavras
+city_name: "Lavras"   # valor exato da coluna residence_city em residencias.csv
+
+data:
+  parquet_path: "./dados/Lavras.parquet"
+  residencias_path: "./dados/residencias.csv"
+  edges_path: "./dados/edges.csv"
+  # parquets por antena gerados pelos notebooks (config.py = Lavras)
+  edges_antenna_path: "./dados/edges_antenna.parquet"
+  antennas_path: "./dados/antennas.parquet"

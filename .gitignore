@@ -1,11 +1,16 @@
-# Dados — arquivos grandes ou gerados (não versionados)
-# Os parquets derivados (edges_antenna, antennas) são gerados pelo 1-eda.ipynb
-dados/
+# Output gerado pelo pipeline em runtime (não versionado)
+output/
 
+# Dados grandes ou intermediários (os parquets pequenos podem ser versionados)
+dados/residencias.csv
+dados/edges.csv
+dados/*_edges.csv
+dados
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
+.python-version
 
 # Jupyter
 .ipynb_checkpoints/
