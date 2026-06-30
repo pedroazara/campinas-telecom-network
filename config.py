@@ -6,5 +6,5 @@
 # CITY_PARQUET → nome do arquivo .parquet dentro da pasta dados/
 #                (e.g. "Campinas.parquet", "Lavras.parquet").
 
-CITY_NAME    = "Campinas"
-CITY_PARQUET = "Campinas.parquet"
+CITY_NAME    = "Lavras"
+CITY_PARQUET = "Lavras.parquet"
