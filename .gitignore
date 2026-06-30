@@ -1,3 +1,22 @@
-residencias.csv
+# Dados — arquivos grandes ou gerados (não versionados)
+# Os parquets derivados (edges_antenna, antennas) são gerados pelo 1-eda.ipynb
 dados/
+
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Ambiente e empacotamento
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -31,6 +31,23 @@ dados de residência e quintis socioeconômicos dos usuários.
 - `edges_antenna.parquet` / `antennas.parquet` — saídas do `1-eda.ipynb` consumidas pelo
   `2-rede-complexa.ipynb`.
 
+## Configuração da cidade
+
+Antes de rodar qualquer notebook, edite o arquivo **`config.py`** na raiz do repositório:
+
+```python
+CITY_NAME    = "Campinas"          # nome da cidade em residence_city
+CITY_PARQUET = "Campinas.parquet"  # arquivo em dados/
+```
+
+- `CITY_NAME` deve bater exatamente com o valor da coluna `residence_city` em `residencias.csv`
+  (e.g. `"Campinas"`, `"Lavras"`).
+- `CITY_PARQUET` é o nome do arquivo `.parquet` dentro de `dados/` que contém os emissores
+  daquela cidade (e.g. `"Lavras.parquet"`).
+
+Todos os notebooks importam essas duas variáveis com `from config import CITY_NAME, CITY_PARQUET`,
+então basta alterar `config.py` e rodar os notebooks normalmente.
+
 ## Como executar
 
 Abra os notebooks no Jupyter/JupyterLab/VS Code com o ambiente `sistemas-complexos` e execute as
@@ -45,18 +62,21 @@ Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`
 ## Análises incluídas
 
 **EDA (`1-eda.ipynb`)**
+
 - Dicionário e checagens de qualidade (nulos, duplicados, consistência das listas internas).
 - Distribuições de chamadas, receptores distintos e duração; Pareto e CCDF.
 - Distância residencial das arestas e concentração de contatos por emissor.
 - Verificação dos nós sem localização e construção das tabelas por antena.
 
 **Topologia da rede (`2-rede-complexa.ipynb`)**
+
 - Grafo não-direcionado ponderado, densidade, distribuição de grau e CCDF.
 - Componentes conexas e componente gigante; clustering.
 - **Centralidades (grau, força, intermediação, autovetor) e identificação de hubs.**
 - Comunidades por Louvain e modularidade.
 
 **Análise espacial (`3-analise-espacial.ipynb`)**
+
 - Estrutura geográfica sobre o mapa de Campinas: scatter de antenas, Voronoi por quintil.
 - Distribuição espacial das comunidades por antena e mapa de hubs.
 - **Decaimento da intensidade de chamadas com a distância residencial.**
@@ -64,6 +84,7 @@ Dependências: `pandas`, `numpy`, `pyarrow`, `matplotlib`, `seaborn`, `networkx`
 - **Rede agregada entre antenas: fluxo de chamadas entre regiões da cidade.**
 
 **Análises avançadas (`4-analises-avancadas.ipynb`)**
+
 - **Ajuste de lei de potência** da distribuição de grau (rede livre de escala?).
 - **Assortatividade de grau** e **decomposição em k-core** (núcleo-periferia).
 - **Small-world**: clustering e caminho médio vs. grafo aleatório equivalente (coeficiente σ).
