@@ -2,9 +2,28 @@
 
 from __future__ import annotations
 
+import random
+
 import numpy as np
 import pandas as pd
 import networkx as nx
+
+
+def average_clustering_fast(G: nx.Graph, max_exact: int = 60_000,
+                            n_sample: int = 3000, seed: int = 42) -> float:
+    """Clustering médio; em grafos grandes usa amostragem de nós.
+
+    O clustering exato é O(Σ grau²): em redes com hubs enormes (cidades grandes) ele
+    é inviável. Amostrar nós dá uma estimativa estável e rápida.
+    """
+    n = G.number_of_nodes()
+    if n == 0:
+        return 0.0
+    if n <= max_exact:
+        return nx.average_clustering(G)
+    rng = random.Random(seed)
+    sample = rng.sample(list(G.nodes()), min(n_sample, n))
+    return nx.average_clustering(G, nodes=sample)
 
 
 def build_edges_graph(edges_df: pd.DataFrame) -> pd.DataFrame:

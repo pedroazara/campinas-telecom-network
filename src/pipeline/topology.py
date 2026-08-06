@@ -10,11 +10,16 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from networkx.algorithms.community import louvain_communities, modularity
 
+from ..graph_builder import average_clustering_fast
+
 logger = logging.getLogger("pipeline")
 
 
-def run(G: nx.Graph, G_main: nx.Graph, config: dict, exporter) -> dict:
-    """Calcula e exporta as métricas de topologia da rede."""
+def run(G: nx.Graph, G_main: nx.Graph, config: dict, exporter, communities=None) -> dict:
+    """Calcula e exporta as métricas de topologia da rede.
+
+    `communities` pode ser fornecido pré-calculado (Louvain) para evitar recomputação.
+    """
     logger.info("[topology] grau, componentes, clustering, centralidades, comunidades")
     k_sample = config.get("advanced", {}).get("betweenness_sample_k", 500)
 
@@ -54,16 +59,31 @@ def run(G: nx.Graph, G_main: nx.Graph, config: dict, exporter) -> dict:
     ax.set_title("CCDF da distribuição de grau")
     exporter.save_figure(fig, "ccdf", "topology")
 
-    # -------- clustering --------
-    avg_clustering = nx.average_clustering(G)
+    # -------- clustering (amostrado em grafos grandes) --------
+    avg_clustering = average_clustering_fast(G)
 
     # -------- centralidades (componente gigante) --------
+    # Em grafos enormes, betweenness/eigenvector são inviáveis (cada BFS custa dezenas de
+    # segundos); usamos grau e força, que identificam bem os hubs e são instantâneos.
+    n_main = G_main.number_of_nodes()
     deg_c = dict(G_main.degree())
     strength = dict(G_main.degree(weight="q_calls"))
-    betw = nx.betweenness_centrality(
-        G_main, k=min(k_sample, G_main.number_of_nodes()), weight=None, seed=42
-    )
-    eig = nx.eigenvector_centrality(G_main, max_iter=1000, weight="weight")
+
+    if n_main > 300_000:
+        logger.warning("[topology] grafo enorme (%d nós) — betweenness/eigenvector pulados; hubs por grau e força", n_main)
+        betw = {n: float("nan") for n in G_main.nodes()}
+        eig = {n: float("nan") for n in G_main.nodes()}
+    else:
+        k_betw = min(k_sample, 150) if n_main > 120_000 else min(k_sample, n_main)
+        betw = nx.betweenness_centrality(G_main, k=k_betw, weight=None, seed=42)
+        if n_main > 120_000:
+            eig = {n: float("nan") for n in G_main.nodes()}
+        else:
+            try:
+                eig = nx.eigenvector_centrality(G_main, max_iter=1000, weight="weight")
+            except nx.PowerIterationFailedConvergence:
+                logger.warning("[topology] eigenvector não convergiu — NaN")
+                eig = {n: float("nan") for n in G_main.nodes()}
 
     centralidades = pd.DataFrame({"user_id": list(G_main.nodes())})
     centralidades["grau"] = centralidades["user_id"].map(deg_c)
@@ -74,8 +94,9 @@ def run(G: nx.Graph, G_main: nx.Graph, config: dict, exporter) -> dict:
         centralidades.sort_values("grau", ascending=False).head(20), "top_hubs.csv"
     )
 
-    # -------- comunidades (Louvain) --------
-    communities = louvain_communities(G_main, weight="weight", seed=42)
+    # -------- comunidades (Louvain — reaproveita se já calculado) --------
+    if communities is None:
+        communities = louvain_communities(G_main, weight="weight", seed=42)
     Q = modularity(G_main, communities, weight="weight")
     community_sizes = sorted((len(c) for c in communities), reverse=True)
 

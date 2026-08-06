@@ -9,11 +9,20 @@ socioeconômica, hubs, robustez) e exporta figuras, métricas e um relatório po
 
 ```bash
 python main.py --city campinas --analyses all
+python main.py --city all                             # roda todas as cidades configuradas
 python main.py --city campinas --analyses topology spatial
 python main.py --city campinas --analyses advanced --output ./resultados
 python main.py --city campinas --no-basemap          # modo offline (sem tiles)
-python main.py --city lavras  --analyses all
 ```
+
+Cidades já configuradas: **campinas, lavras, cabofrio, divinopolis, fortaleza**.
+
+> ⚠️ **Fortaleza** tem ~750 mil usuários: a execução é lenta (~15–20 min) e as métricas que exigem
+> percorrer a rede inteira (**betweenness, small-world, robustez, rich-club**) são puladas
+> automaticamente por serem inviáveis nesse tamanho — as demais análises saem completas.
+
+> **Como interpretar os resultados:** veja [`GUIA_INTERPRETACAO.md`](GUIA_INTERPRETACAO.md), escrito
+> para quem vai analisar os dados (explica cada figura, métrica e tabela).
 
 Argumentos:
 
@@ -117,10 +126,16 @@ e comunidades (Louvain + modularidade).
 
 **Espacial e socioeconômica** — diagrama de Voronoi por quintil, **homofilia socioeconômica**
 (observado vs. modelo nulo + matriz de mistura), **decaimento da intensidade com a distância**,
-**rede agregada de fluxo entre antenas** e mapa de hubs.
+**rede agregada de fluxo entre antenas**, mapa de hubs, visualização da rede sobre o mapa e
+concentração espacial das comunidades. Análises socioeconômicas: **grau por quintil** (desigualdade
+de conectividade) e **quintil dos hubs** (os mais conectados são de qual estrato?).
 
 **Avançadas** — **lei de potência** (MLE/Clauset), **assortatividade** de grau e **k-core**,
-**small-world** (σ vs. grafo aleatório) e **robustez** (ataque dirigido vs. falha aleatória).
+**small-world** (σ vs. grafo aleatório), **robustez** (ataque dirigido vs. falha aleatória) e
+**rich-club** (os hubs formam um clube?).
+
+Todas as análises têm **guardas de robustez**: em cidades pequenas (poucas antenas, grau baixo) as
+análises que não fazem sentido são puladas com aviso, sem quebrar a execução.
 
 ## Próximos passos sugeridos
 

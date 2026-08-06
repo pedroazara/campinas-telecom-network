@@ -9,8 +9,8 @@ Mantém as variáveis usadas pelos notebooks de referência (`CITY_NAME`,
 - CITY_PARQUET → nome do arquivo .parquet dentro da pasta dados/.
 """
 
-CITY_NAME = "Lavras"
-CITY_PARQUET = "Lavras.parquet"
+CITY_NAME = "Cabo Frio"
+CITY_PARQUET = "cabofrio.parquet"
 
 
 def load_config(city, extra_config_path=None):

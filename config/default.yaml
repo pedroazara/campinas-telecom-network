@@ -24,6 +24,8 @@ spatial:
   download_basemap: true   # contextily — requer internet
   voronoi: true
   network_map_communities: 12   # nº de maiores comunidades no recorte da rede sobre o mapa
+  network_map_max_edges: 1500   # nº máx. de arestas (mais fortes) desenhadas — evita poluir o mapa
+  network_map_max_nodes: 6000   # nº máx. de usuários desenhados (amostra em cidades grandes)
 
 advanced:
   robustness_steps: 50

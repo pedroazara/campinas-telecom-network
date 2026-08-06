@@ -31,38 +31,44 @@ def run(config: dict) -> dict:
     logger.info("[eda] lendo base agregada: %s", data["parquet_path"])
     base = pq.ParquetFile(data["parquet_path"]).read().to_pandas()
 
-    logger.info("[eda] expandindo listas em arestas emissor→receptor")
-    records = []
-    for row in base.itertuples(index=False):
-        for receiver, q_calls, distance_km, duration_total in zip(
-            row.IDs_receivers_corr,
-            row.q_calls_corr,
-            row.residence_distance_km_corr,
-            row.calls_duration_total_corr,
-        ):
-            records.append(
-                {
-                    "id_emisor": row.id_emisor,
-                    "id_receiver": receiver,
-                    "q_calls": q_calls,
-                    "residence_distance_km": distance_km,
-                    "calls_duration_total": duration_total,
-                }
-            )
-    edges = pd.DataFrame(records)
+    # Expansão vetorizada das listas em arestas (explode em nível C — essencial para
+    # cidades grandes como Fortaleza, com milhões de arestas; um loop Python travaria).
+    n_edges = int(base["unique_receivers"].sum())
+    logger.info("[eda] expandindo listas em %d arestas emissor→receptor", n_edges)
+    list_cols = [
+        "IDs_receivers_corr",
+        "q_calls_corr",
+        "residence_distance_km_corr",
+        "calls_duration_total_corr",
+    ]
+    edges = (
+        base[["id_emisor"] + list_cols]
+        .explode(list_cols, ignore_index=True)
+        .rename(
+            columns={
+                "IDs_receivers_corr": "id_receiver",
+                "q_calls_corr": "q_calls",
+                "residence_distance_km_corr": "residence_distance_km",
+                "calls_duration_total_corr": "calls_duration_total",
+            }
+        )
+    )
+    del base
+    for col in ["q_calls", "residence_distance_km", "calls_duration_total"]:
+        edges[col] = pd.to_numeric(edges[col], errors="coerce")
     edges["avg_duration_per_call"] = edges["calls_duration_total"] / edges["q_calls"].replace(0, np.nan)
 
     logger.info("[eda] cruzando com residencias.csv (pode demorar — arquivo grande)")
-    residencias = pd.read_csv(data["residencias_path"])
-    res = residencias[
-        [
+    res = pd.read_csv(
+        data["residencias_path"],
+        usecols=[
             "ID",
             "residence_geometry",
             "residence_city",
             "residence_quintile_state",
             "residence_quintile_nation",
-        ]
-    ].copy()
+        ],
+    )
 
     edges["id_emisor"] = edges["id_emisor"].astype(str).str.strip()
     edges["id_receiver"] = edges["id_receiver"].astype(str).str.strip()

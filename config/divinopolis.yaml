@@ -1,0 +1,10 @@
+# Configuração da cidade de Divinópolis (MG).
+city: divinopolis
+city_name: "Divinópolis"   # valor exato em residence_city
+
+data:
+  parquet_path: "./dados/Divinópolis.parquet"
+  residencias_path: "./dados/residencias.csv"
+  edges_path: "./dados/divinopolis_edges.csv"
+  edges_antenna_path: "./dados/divinopolis_edges_antenna.parquet"
+  antennas_path: "./dados/divinopolis_antennas.parquet"

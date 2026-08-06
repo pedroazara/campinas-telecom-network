@@ -1,0 +1,10 @@
+# Configuração da cidade de Cabo Frio (RJ).
+city: cabofrio
+city_name: "Cabo Frio"   # valor exato em residence_city
+
+data:
+  parquet_path: "./dados/Cabo Frio.parquet"
+  residencias_path: "./dados/residencias.csv"
+  edges_path: "./dados/cabofrio_edges.csv"
+  edges_antenna_path: "./dados/cabofrio_edges_antenna.parquet"
+  antennas_path: "./dados/cabofrio_antennas.parquet"

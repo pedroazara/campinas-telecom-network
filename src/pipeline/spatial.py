@@ -129,11 +129,20 @@ def _plot_community_network(G_main, gdf, vor_gdf, community_df, community_sizes,
         edges_graph["source"].isin(users) & edges_graph["target"].isin(users)
     ].rename(columns={"source": "id_emisor", "target": "id_receiver"}).copy()
 
+    # declutter: em recortes grandes desenha só as arestas mais fortes (backbone da rede)
+    max_edges = config.get("spatial", {}).get("network_map_max_edges", 1500)
+    if "weight" in top_edges.columns and len(top_edges) > max_edges:
+        top_edges = top_edges.nlargest(max_edges, "weight")
+
     nodes = pd.DataFrame({"user_id": sorted(users)})
     nodes["antenna_id"] = nodes["user_id"].map(user_antenna)
     nodes = nodes.dropna(subset=["antenna_id"]).merge(
         community_df[["user_id", "community_rank"]], on="user_id", how="left"
     )
+    # em cidades grandes, amostra os usuários desenhados (mapa legível e rápido)
+    max_nodes = config.get("spatial", {}).get("network_map_max_nodes", 6000)
+    if len(nodes) > max_nodes:
+        nodes = nodes.sample(max_nodes, random_state=42).reset_index(drop=True)
 
     antenna_point = gdf.set_index("antenna_id").geometry
     antenna_poly = vor_gdf.set_index("antenna_id").geometry if vor_gdf is not None else None
@@ -157,9 +166,9 @@ def _plot_community_network(G_main, gdf, vor_gdf, community_df, community_sizes,
     if vor_gdf is not None:
         vor_gdf.boundary.plot(ax=ax, color="dimgray", linewidth=0.6, alpha=0.5)
     if len(edges_gdf):
-        edges_gdf.plot(ax=ax, color="steelblue", linewidth=0.4, alpha=0.15)
+        edges_gdf.plot(ax=ax, color="steelblue", linewidth=0.4, alpha=0.20)
     nodes_gdf.plot(ax=ax, column="community_rank", cmap="tab20", categorical=True,
-                   markersize=6, legend=False)
+                   markersize=3, alpha=0.9, legend=False)
     gdf.plot(ax=ax, color="black", markersize=18, alpha=0.7)
     _add_basemap(ax, config)
     ax.set_axis_off()
@@ -226,8 +235,11 @@ def _community_spatial_concentration(community_df, community_sizes, user_antenna
 
 # --------------------------------------------------------------------------- run
 def run(G_main: nx.Graph, antennas_df: pd.DataFrame, edges_antenna_df: pd.DataFrame,
-        config: dict, exporter) -> dict:
-    """Calcula e exporta Voronoi, homofilia socioeconômica, decaimento, rede de antenas e hubs."""
+        config: dict, exporter, communities=None) -> dict:
+    """Calcula e exporta Voronoi, homofilia socioeconômica, decaimento, rede de antenas e hubs.
+
+    `communities` pode ser fornecido pré-calculado (Louvain) para evitar recomputação.
+    """
     logger.info("[spatial] Voronoi, homofilia, decaimento, rede de antenas, hubs")
     city_name = exporter.city_name
 
@@ -235,8 +247,9 @@ def run(G_main: nx.Graph, antennas_df: pd.DataFrame, edges_antenna_df: pd.DataFr
     edges_graph = build_edges_graph(edges_antenna_df)
     user_antenna = build_user_antenna_map(edges_antenna_df)
 
-    # comunidades (Louvain) — usadas no mapa da rede e na concentração espacial
-    communities = louvain_communities(G_main, weight="weight", seed=42)
+    # comunidades (Louvain — reaproveita se já calculado) — usadas no mapa e na concentração
+    if communities is None:
+        communities = louvain_communities(G_main, weight="weight", seed=42)
     community_df = pd.DataFrame(
         [{"user_id": u, "community": i} for i, com in enumerate(communities) for u in com]
     )
@@ -246,7 +259,15 @@ def run(G_main: nx.Graph, antennas_df: pd.DataFrame, edges_antenna_df: pd.DataFr
     )
     community_df = community_df.merge(community_sizes, on="community", how="left")
 
-    vor_gdf = _build_voronoi(gdf) if config.get("spatial", {}).get("voronoi", True) else None
+    vor_gdf = None
+    if config.get("spatial", {}).get("voronoi", True):
+        if gdf["antenna_id"].nunique() >= 4:
+            try:
+                vor_gdf = _build_voronoi(gdf)
+            except Exception as exc:
+                logger.warning("[spatial] Voronoi não construído (%s)", exc)
+        else:
+            logger.warning("[spatial] poucas antenas (%d) — Voronoi pulado", gdf["antenna_id"].nunique())
 
     # -------- Voronoi por quintil --------
     if vor_gdf is not None:
@@ -285,27 +306,64 @@ def run(G_main: nx.Graph, antennas_df: pd.DataFrame, edges_antenna_df: pd.DataFr
     eh["q_target"] = eh["target"].map(user_quintile)
     eh = eh.dropna(subset=["q_source", "q_target"])
 
-    obs_same = float((eh["q_source"] == eh["q_target"]).mean())
-    codes, _ = pd.factorize(node_q)
-    pos = {nd: i for i, nd in enumerate(giant_nodes)}
-    si = eh["source"].map(pos).to_numpy()
-    ti = eh["target"].map(pos).to_numpy()
-    rng = np.random.default_rng(42)
-    null_same = [float((perm[si] == perm[ti]).mean())
-                 for perm in (rng.permutation(codes) for _ in range(100))]
-    null_mean = float(np.mean(null_same))
-    ratio = obs_same / null_mean
-
     ordem = ["q1", "q2", "q3", "q4", "q5"]
-    mix = pd.crosstab(eh["q_source"], eh["q_target"]).reindex(index=ordem, columns=ordem, fill_value=0)
-    mix_sym = mix + mix.T
-    mix_norm = mix_sym.div(mix_sym.sum(axis=1), axis=0)
-    fig, ax = plt.subplots(figsize=(6, 5))
-    sns.heatmap(mix_norm, annot=True, fmt=".2f", cmap="rocket_r", ax=ax)
-    ax.set_title(f"Matriz de mistura por quintil — {city_name}")
-    ax.set_xlabel("quintil do outro extremo")
-    ax.set_ylabel("quintil de origem")
-    exporter.save_figure(fig, "homophily_matrix", "spatial")
+    obs_same = null_mean = ratio = None
+    if len(eh) > 0 and eh["q_source"].nunique() >= 2:
+        obs_same = float((eh["q_source"] == eh["q_target"]).mean())
+        codes, _ = pd.factorize(node_q)
+        pos = {nd: i for i, nd in enumerate(giant_nodes)}
+        si = eh["source"].map(pos).to_numpy()
+        ti = eh["target"].map(pos).to_numpy()
+        rng = np.random.default_rng(42)
+        null_same = [float((perm[si] == perm[ti]).mean())
+                     for perm in (rng.permutation(codes) for _ in range(100))]
+        null_mean = float(np.mean(null_same))
+        ratio = obs_same / null_mean if null_mean else None
+
+        mix = pd.crosstab(eh["q_source"], eh["q_target"]).reindex(index=ordem, columns=ordem, fill_value=0)
+        mix_sym = mix + mix.T
+        mix_norm = mix_sym.div(mix_sym.sum(axis=1).replace(0, np.nan), axis=0)
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.heatmap(mix_norm, annot=True, fmt=".2f", cmap="rocket_r", ax=ax)
+        ax.set_title(f"Matriz de mistura por quintil — {city_name}")
+        ax.set_xlabel("quintil do outro extremo")
+        ax.set_ylabel("quintil de origem")
+        exporter.save_figure(fig, "homophily_matrix", "spatial")
+    else:
+        logger.warning("[spatial] homofilia por quintil pulada (poucos quintis distintos)")
+
+    # -------- socioeconômico: conectividade por quintil e quintil dos hubs --------
+    deg = dict(G_main.degree())
+    socio = pd.DataFrame({"user_id": list(G_main.nodes())})
+    socio["grau"] = socio["user_id"].map(deg)
+    socio["quintil"] = socio["user_id"].map(user_quintile)
+    socio = socio.dropna(subset=["quintil"])
+    if not socio.empty and socio["quintil"].nunique() >= 2:
+        grau_q = socio.groupby("quintil")["grau"].mean().reindex(ordem).dropna()
+        fig, ax = plt.subplots(figsize=(7, 5))
+        ax.bar(grau_q.index, grau_q.values, color="teal")
+        ax.set_xlabel("quintil socioeconômico (q1=+pobre, q5=+rico)")
+        ax.set_ylabel("grau médio (nº de contatos)")
+        ax.set_title(f"Conectividade por quintil — {city_name}")
+        exporter.save_figure(fig, "degree_by_quintile", "spatial")
+
+        top_n = min(200, len(socio))
+        hub_dist = (socio.nlargest(top_n, "grau")["quintil"]
+                    .value_counts(normalize=True).reindex(ordem).fillna(0))
+        pop_dist = socio["quintil"].value_counts(normalize=True).reindex(ordem).fillna(0)
+        comp = pd.DataFrame({f"hubs (top {top_n})": hub_dist, "população": pop_dist})
+        fig, ax = plt.subplots(figsize=(7, 5))
+        comp.plot(kind="bar", ax=ax, color=["crimson", "gray"])
+        ax.set_xlabel("quintil socioeconômico")
+        ax.set_ylabel("fração")
+        ax.set_title(f"Quintil dos hubs vs. população — {city_name}")
+        ax.tick_params(axis="x", rotation=0)
+        exporter.save_figure(fig, "hubs_quintile", "spatial")
+
+        exporter.add_metrics("spatial", {
+            "degree_by_quintile": {q: round(float(v), 2) for q, v in grau_q.items()},
+            "hub_quintile_distribution": {q: round(float(v), 3) for q, v in hub_dist.items()},
+        })
 
     # -------- decaimento com a distância --------
     dist_ok = edges_graph.dropna(subset=["residence_distance_km"]).copy()
@@ -379,24 +437,28 @@ def run(G_main: nx.Graph, antennas_df: pd.DataFrame, edges_antenna_df: pd.DataFr
 
     metrics = {
         "n_antennas": int(gdf["antenna_id"].nunique()),
-        "homophily_observed": obs_same,
-        "homophily_null": null_mean,
-        "homophily_ratio": float(ratio),
         "antenna_network_nodes": GA.number_of_nodes(),
         "antenna_network_edges": GA.number_of_edges(),
         "antenna_network_density": float(nx.density(GA)),
     }
+    if ratio is not None:
+        metrics.update(homophily_observed=obs_same, homophily_null=null_mean, homophily_ratio=float(ratio))
     exporter.add_metrics("spatial", metrics)
 
+    if ratio is not None:
+        homo_txt = (
+            f"Há **homofilia socioeconômica**: **{obs_same:.0%}** das chamadas ligam pessoas do "
+            f"mesmo quintil, contra **{null_mean:.0%}** esperado ao acaso — cerca de **{ratio:.1f}×**. "
+        )
+    else:
+        homo_txt = "A homofilia por quintil não pôde ser estimada (poucos quintis distintos). "
     exporter.add_report_section(
         "Análise espacial e socioeconômica",
         f"Os usuários se distribuem por **{gdf['antenna_id'].nunique()} antenas** (regiões de "
-        f"Voronoi). Há **homofilia socioeconômica**: **{obs_same:.0%}** das chamadas ligam pessoas "
-        f"do mesmo quintil, contra **{null_mean:.0%}** esperado ao acaso — cerca de **{ratio:.1f}×**. "
-        f"A intensidade das chamadas cai com a distância residencial (efeito de gravidade espacial). "
-        f"Agregada por antena, a rede tem **{GA.number_of_nodes()} regiões** e "
-        f"**{GA.number_of_edges():,} fluxos** (densidade {nx.density(GA):.2f}), revelando os "
-        f"principais corredores de comunicação da cidade.",
+        f"Voronoi). {homo_txt}A intensidade das chamadas cai com a distância residencial "
+        f"(efeito de gravidade espacial). Agregada por antena, a rede tem "
+        f"**{GA.number_of_nodes()} regiões** e **{GA.number_of_edges():,} fluxos** "
+        f"(densidade {nx.density(GA):.2f}), revelando os principais corredores da cidade.",
     )
 
     exporter.add_report_section(
