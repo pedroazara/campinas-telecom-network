@@ -1,179 +1,204 @@
 # CLAUDE.md — Contexto do projeto para o agente de IA
 
 > Este arquivo serve para um agente de IA **interpretar o projeto** e ajudar a sintetizar uma
-> apresentação. Ele resume objetivo, dados, notebooks e **todos os achados com os números reais**
+> apresentação. Ele resume objetivo, dados, código e **todos os achados com os números reais**
 > já computados, além de traduzir os resultados técnicos em **questões relevantes para a cidade**.
 
 ---
 
 ## 1. Objetivo e enquadramento da apresentação
 
-**Tema:** caracterizar a **rede telefônica urbana de Campinas (SP)** por métodos de **redes
-complexas**, a partir de dados anonimizados de chamadas cruzados com residência e quintis
-socioeconômicos dos usuários.
+**Tema:** caracterizar a **rede de comunicação entre as regiões de Campinas (SP)** por métodos de
+redes complexas, a partir de dados anonimizados de chamadas cruzados com residência e quintis
+socioeconômicos.
 
-**Formato da apresentação (importante):** o professor quer que o grupo apresente **como se ele fosse
-o prefeito de Campinas**. Portanto, o produto final não é "uma lista de métricas de grafo", e sim
-**questões relevantes para a gestão da cidade** sustentadas pelos dados. Cada achado técnico deve ser
-traduzido em uma pergunta/insight que um prefeito acharia útil (desigualdade social, organização
-territorial, infraestrutura crítica, resiliência, onde investir).
+**Mudança de unidade de análise (importante):** o projeto começou com **a pessoa** como nó. Por
+orientação do professor, a unidade passou a ser a **antena** — o único dado geográfico realmente
+disponível. Cada antena é uma **região da cidade**; as pessoas que moram sob ela entram como
+**atributos agregados** do nó. Consequência direta: as chamadas entre dois moradores da mesma antena
+deixam de ser arestas e viram a **insularidade** daquela região.
 
-**Pergunta-guia:** *o que os padrões de comunicação telefônica revelam sobre a estrutura social e
-espacial de Campinas, e o que isso sugere para políticas públicas?*
+**Formato da apresentação:** o professor quer que o grupo apresente **como se ele fosse o prefeito de
+Campinas**. O produto final não é uma lista de métricas de grafo, e sim **questões de gestão urbana**
+sustentadas pelos dados.
+
+**Pergunta-guia:** *o que os fluxos de chamadas entre regiões revelam sobre a organização espacial e
+social de Campinas, e o que isso sugere para políticas públicas?*
 
 ---
 
 ## 2. Dados (`dados/`)
 
-| Arquivo | O que é | Tamanho |
+| Arquivo | O que é |
+|---|---|
+| `<Cidade>.parquet` | Base agregada por emissor residente na cidade; listas por receptor (IDs, nº de chamadas, distância residencial, duração). |
+| `residencias.csv` | Residência de cada usuário: `ID`, `residence_geometry` (ponto em WKB), `residence_city`, `residence_quintile_state/nation`. **~1 GB, não versionado.** |
+| `<cidade>_edges_antenna.parquet` | Arestas usuário→usuário (só quem tem residência conhecida) + id da antena de cada extremo. Gerado pelo módulo de EDA. |
+| `<cidade>_antennas.parquet` | Antenas residenciais distintas, com cidade e quintis. |
+
+**Números da base de Campinas:** 25.176 usuários com residência conhecida, distribuídos em
+**145 antenas** (mediana de **148 moradores por antena**, mín. 11, máx. 587). Quintis `q1`–`q5`
+(q1 = 20% mais pobres). **~7,8% dos usuários** não têm residência cadastrada e ficam de fora.
+
+**O quintil é um atributo da antena, não da pessoa:** ele vem colado à geometria residencial, então
+todos os moradores de uma antena compartilham o mesmo quintil. Isso é decisivo para interpretar a
+homofilia (seção 4.3). Distribuição das 145 antenas: q5=66, q4=41, q3=21, q1=10, q2=7.
+
+---
+
+## 3. Estrutura do código
+
+O pipeline é a fonte da verdade; os notebooks são uma camada narrativa fina sobre ele.
+
+```
+src/antenna.py            constrói a rede de regiões (nós, fluxos, backbone, gravidade, s-core)
+src/graph_builder.py      utilitários de agregação de pares de usuários
+src/exporter.py           figuras, métricas (JSON), relatório (MD) e InlineExporter (notebooks)
+src/pipeline/eda.py       gera os parquets por antena a partir do residencias.csv
+src/pipeline/topology.py  força, backbone, macro-regiões, s-core, balanço
+src/pipeline/spatial.py   Voronoi, corredores, gravidade, homofilia, insularidade
+src/pipeline/advanced.py  robustez ponderada, rich-club, individual vs regional
+main.py                   CLI: python main.py --city campinas --analyses all
+notebooks/                1-eda, 2-rede-antenas, 3-analise-espacial, 4-analises-avancadas
+```
+
+**Construção da rede (em `src/antenna.py`):**
+- **Nó** = antena. Atributos: `n_users`, `calls_out/in/total`, `calls_internal`, `insularity`,
+  `net_balance`, `calls_per_user`, quintil, `lon`/`lat`.
+- **Aresta** = fluxo não-direcionado entre duas antenas distintas, com `q_calls`,
+  `calls_duration_total`, `n_pairs` (pares de pessoas por trás do fluxo), `dist_km` (haversine) e
+  `intensity` (`q_calls` normalizado pelo produto das populações).
+- Há também a versão **dirigida** (`net.D`), usada para reciprocidade e balanço emissor/receptor.
+- O **peso é `q_calls` bruto**. O antigo `log1p(q_calls) * log1p(duração)` fazia sentido entre
+  pessoas, não entre regiões.
+
+---
+
+## 4. Achados completos (números validados, `output/campinas/summary/`)
+
+### 4.1 A rede de regiões
+- **145 regiões, 5.817 fluxos, densidade 0,557** — mais da metade dos pares de regiões da cidade tem
+  contato. Grau mediano 85, caminho médio **1,44**.
+- **35,9% de todas as chamadas não saem da região de origem** (insularidade mediana por região: 0,18;
+  máximo 0,55).
+- Volume desigual entre regiões: **Gini 0,37**.
+- **Backbone (filtro de disparidade, α=0,05): 656 fluxos (11% do total) carregam 62% de todas as
+  chamadas** e cobrem as 145 regiões (um corte pelo peso bruto do mesmo tamanho alcançaria 139).
+- **5 macro-regiões funcionais** (Louvain ponderado, modularidade 0,40, a maior com 54 antenas).
+- **Reciprocidade 0,86** — quem recebe, devolve.
+- Núcleo s-core final: **42 regiões**.
+
+### 4.2 Espaço e gravidade
+- Cada antena é uma **célula de Voronoi**; os mapas temáticos mostram quintil, insularidade, balanço
+  emissor/receptor, chamadas por morador e macro-regiões.
+- **As 5 macro-regiões saem espacialmente contíguas**, embora o Louvain não conheça geografia — a
+  divisão funcional da cidade coincide com a territorial. *É a figura de maior impacto visual.*
+- **Modelo de gravidade:** `F_ij ≈ C · (n_i n_j)^0,56 / d_ij^1,09`, R² = 0,27. O expoente de
+  distância ≈ 1 formaliza o decaimento (antes só mostrado como curva).
+- Os **resíduos** do modelo apontam pares de bairros que falam muito mais do que tamanho e distância
+  explicariam — afinidades que a geografia não capta.
+
+### 4.3 Homofilia socioeconômica — **o achado mudou de sentido**
+- **Entre regiões:** 35% do volume liga áreas do mesmo quintil, contra 31% ao acaso → **1,12×**.
+- **Índice de auto-preferência por quintil** (observado/esperado) — aqui está o que sobrevive:
+  **q5 = 1,23**, q4 = 0,92, **q3 = 1,35**, q1 = 0,69, q2 = 0,41. *As regiões ricas se fecham; as
+  pobres se dispersam pelos demais estratos.*
+- **O antigo 1,9× era um artefato do modelo nulo.** No nível individual, 58% do volume liga o mesmo
+  quintil; contra um nulo que embaralha o quintil **entre pessoas**, isso dá **2,11×**. Mas esse nulo
+  destrói também o fato de que vizinhos compartilham quintil por morarem no mesmo lugar. Com um nulo
+  que embaralha o quintil **entre regiões** (preservando quem mora com quem), o esperado sobe para
+  56% e a razão cai para **1,04×**.
+- **Conclusão:** a "segregação socioeconômica na comunicação" é, em quase toda a sua extensão,
+  **segregação territorial**. As pessoas falam com quem está perto, e quem está perto tem a mesma
+  renda. Isso não enfraquece a apresentação — deixa o argumento mais acionável.
+
+### 4.4 Robustez e rich-club
+- **A rede não fragmenta** — ela perde capacidade aos poucos. A robustez é medida pela queda da
+  **eficiência de comunicação ponderada**, não pelo tamanho da componente gigante.
+- Removendo as regiões de maior volume, a eficiência cai à metade com **28%** das regiões fora; a
+  perda aleatória nunca chega lá (diferença de 40 p.p. em favor do acaso com 20% removidas).
+- **Rich-club ρ ≈ 2,0**: as regiões de maior tráfego concentram volume entre si muito acima do
+  esperado se os pesos fossem embaralhados.
+
+---
+
+## 5. O que saiu da análise e por quê
+
+A mudança de unidade invalidou boa parte do ferramental anterior. Isto é material de apresentação —
+mostra domínio do método, não fracasso.
+
+| Análise removida | Por que perdeu sentido | O que entrou no lugar |
 |---|---|---|
-| `Campinas.parquet` | Base agregada por emissor residente em Campinas; cada linha tem totais de chamadas e listas por receptor (IDs, nº de chamadas, distância residencial, duração). | pequeno |
-| `residencias.csv` | Residência de cada usuário: `ID`, `residence_geometry` (ponto em WKB), `residence_city`, `residence_quintile_state`, `residence_quintile_nation`. **~1 GB, não versionado.** | grande |
-| `edges.csv` | Arestas emissor→receptor expandidas da base (saída do NB1). | 56.139 arestas |
-| `edges_antenna.parquet` | Arestas filtradas (só usuários com residência conhecida) + id da antena de cada extremo. | 48.947 arestas, 8 colunas |
-| `antennas.parquet` | Antenas residenciais distintas em Campinas, com cidade e quintis. | 145 antenas |
+| Lei de potência (α ≈ 3,57) | 145 nós não sustentam ajuste de cauda; grau concentrado em ~85 | desigualdade de volume (Gini/Lorenz) |
+| CCDF de grau | degenera numa reta vertical | distribuição de força |
+| Componente gigante / 2.549 componentes | densidade 0,56: tudo é uma componente só | — |
+| Small-world (σ ≈ 596) | caminho médio já é 1,44; a aleatória equivalente também é agrupada | — |
+| k-core (k=12) | trivializa em rede densa | **s-core** (poda por força) |
+| Comunidades de usuários (426, Q=0,98) | comunidade agora é conjunto de antenas | **macro-regiões funcionais** (5, Q=0,40) |
+| Hubs individuais no mapa | não há mais nós-pessoa | força e insularidade por região |
+| Assortatividade de grau (r=+0,40) | grau não distingue nada | assortatividade **ponderada por quintil** |
+| Robustez por fragmentação | a rede nunca fragmenta | **eficiência ponderada** sob remoção |
 
-**Números da base trabalhada:** 22.688 emissores e 22.894 receptores distintos; 594.892 chamadas no
-total; quintis socioeconômicos `q1`–`q5` (q1 = 20% mais pobres, q5 = 20% mais ricos). Cada "antena"
-corresponde a uma geometria residencial distinta e funciona como unidade espacial (~bairro/região).
-**~7,8% dos nós** não têm residência cadastrada e são removidos da rede espacial (são nós periféricos
-de grau baixo, mediana 3 — não hubs).
-
----
-
-## 3. Estrutura dos notebooks
-
-O ambiente Python é o conda **`sistemas-complexos`**. Os notebooks 2, 3 e 4 dependem apenas dos
-parquets pequenos e **rodam de forma independente** (cada um reconstrói o grafo no seu *setup*); o
-NB1 precisa do `residencias.csv`.
-
-1. **`1-eda.ipynb`** — análise exploratória da base e construção das tabelas por antena
-   (`edges_antenna.parquet`, `antennas.parquet`).
-2. **`2-rede-complexa.ipynb`** — topologia: grafo, grau, CCDF, componentes, clustering,
-   centralidades/hubs, comunidades (Louvain).
-3. **`3-analise-espacial.ipynb`** — estrutura espacial/socioeconômica sobre o mapa de Campinas.
-4. **`4-analises-avancadas.ipynb`** — métricas estruturais de redes complexas (scale-free,
-   assortatividade/k-core, small-world, robustez).
-
-**Construção do grafo (comum aos NBs 2–4):** rede **não-direcionada e ponderada**; chamadas A→B e
-B→A são agregadas no mesmo par; o peso é `log1p(q_calls) * log1p(duração_total)`. As análises
-estruturais usam a **componente gigante** `G_main`.
+E o que a nova unidade **passou a permitir**: modelo de gravidade, resíduos de fluxo, backbone por
+disparidade, insularidade, balanço emissor/receptor, reciprocidade e regionalização funcional.
 
 ---
 
-## 4. Achados completos (números já validados)
-
-### 4.1 Topologia (NB2)
-- Grafo: **25.176 nós, 31.509 arestas**, densidade ≈ 1×10⁻⁴ (rede muito esparsa).
-- Distribuição de grau concentrada: **mediana 2**, 75% dos nós com grau ≤ 3, **grau máximo 56** →
-  cauda longa (muitos pouco conectados, poucos hubs).
-- Componentes: **2.549 componentes**; **componente gigante com 18.043 nós (71,7%)**.
-- Clustering médio **0,16** (muito acima do aleatório).
-- Comunidades (Louvain): **426 comunidades**, a maior com 369 usuários, **modularidade 0,983**
-  (estrutura fortemente modular — a rede se divide em muitos grupos coesos).
-- Centralidades calculadas: grau, força (grau ponderado por chamadas), intermediação (betweenness,
-  amostrado k=500), autovetor — usadas para identificar e mapear hubs.
-
-### 4.2 Espacial e socioeconômica (NB3)
-- 145 antenas georreferenciadas em Campinas (coordenadas ≈ -47,05 / -22,94); diagrama de **Voronoi**
-  define a "região de influência" de cada antena, colorida por quintil.
-- **Comunidades têm forte concentração espacial**: cada comunidade ocupa poucas antenas e tem raio
-  médio pequeno; a fração de arestas internas às comunidades fica **muito acima** de um modelo nulo.
-- **Decaimento com a distância:** a intensidade média de chamadas **cai conforme aumenta a distância
-  residencial** entre os usuários (efeito de gravidade espacial).
-- **Homofilia socioeconômica (achado central):** **49% das chamadas ligam pessoas do mesmo quintil**,
-  contra **26% esperado ao acaso** (modelo nulo) → **≈ 1,9×**. As pessoas se comunicam
-  preferencialmente dentro do próprio estrato socioeconômico. (Há também a matriz de mistura 5×5 por
-  quintil.)
-- **Rede agregada entre antenas:** agregando usuários por antena, obtém-se uma rede de **145 regiões
-  com 5.817 fluxos** (densidade 0,557), revelando os principais **corredores de chamadas entre
-  regiões** da cidade.
-- Mapa de hubs e visualização da rede com os usuários distribuídos **dentro das células de Voronoi**
-  das suas antenas (com as fronteiras das regiões desenhadas).
-
-### 4.3 Métricas estruturais avançadas (NB4) — componente gigante, sem self-loops (18.043 nós / 26.159 arestas)
-- **Lei de potência (scale-free):** distribuição de grau de **cauda pesada**; ajuste por MLE
-  (Clauset) dá **α ≈ 3,57** (x_min = 20, KS = 0,12). Faixa típica de redes sociais; potência *pura*
-  não é perfeita (corpo provavelmente lognormal) — comportamento comum em redes de comunicação.
-- **Assortatividade de grau:** **r = +0,40** → rede **assortativa** (hubs se conectam com hubs);
-  k_nn(k) crescente. Típico de redes sociais (≠ redes tecnológicas, em geral disassortativas).
-- **k-core:** núcleo máximo **k = 12**, contendo apenas **29 nós** → periferia grande + núcleo coeso
-  pequeno.
-- **Small-world:** clustering real **0,164** vs **0,0002** no aleatório (≈ 800×); caminho médio
-  **12,1** vs **9,1** no aleatório; **σ ≈ 596 (≫ 1)** → rede **small-world** (alto agrupamento local
-  com caminhos curtos). O caminho um pouco maior que o aleatório reflete a forte modularidade.
-- **Robustez:** sob **ataque dirigido** aos maiores hubs a componente gigante **fragmenta com
-  ~15–20% de remoção**; sob **falha aleatória** ela resiste (mantém >10% mesmo com 50% removidos) →
-  **assinatura clássica de rede com hubs: robusta a falhas, frágil a ataques.**
-
----
-
-## 5. Tradução para questões de cidade (para a apresentação ao "prefeito")
+## 6. Tradução para questões de cidade (apresentação ao "prefeito")
 
 | Achado técnico | Questão relevante para a cidade |
 |---|---|
-| Homofilia socioeconômica ≈ 1,9× | **Segregação social na comunicação:** as pessoas falam quase o dobro dentro do próprio quintil. Campinas tem "bolhas socioeconômicas" que se comunicam pouco entre si — relevante para políticas de integração e mobilidade social. |
-| Decaimento com a distância + comunidades geográficas | **A cidade funciona por regiões locais:** a comunicação é predominantemente de curta distância e os grupos sociais são territorialmente concentrados — informa transporte, descentralização de serviços e planejamento por bairro. |
-| Hubs + robustez (frágil a ataque) | **Infraestrutura/atores críticos:** poucos nós sustentam a conectividade da rede social; sua perda fragmenta a cidade. Útil para resiliência (telecom, comunicação em emergências) e identificação de pontos focais. |
-| Rede entre antenas (corredores) | **Onde estão os fluxos:** os principais corredores de chamadas entre regiões indicam eixos de interação — apoio a decisões de infraestrutura e priorização de investimento. |
-| Distribuição de grau muito desigual | **Desigualdade de conectividade:** poucos muito conectados, muitos pouco conectados — dimensão social/digital da desigualdade. |
+| Segregação territorial, não social (2,11× → 1,04×) | **A desigualdade da comunicação tem endereço.** O que parecia preferência por gente da mesma renda é efeito de morar perto. Integrar estratos não é política sobre indivíduos — é **conectar territórios**. |
+| q5 se fecha (1,23×), q1 se dispersa (0,69×) | **As pontas da cidade se comportam de forma oposta.** As regiões ricas concentram a comunicação em si mesmas; as pobres se espalham por todos os estratos — quem depende do resto da cidade para trabalhar, se comunica com o resto da cidade. |
+| 36% das chamadas não saem da região | **A vida acontece no bairro.** Argumento direto para descentralizar serviços, saúde e equipamentos públicos. |
+| Backbone: 11% dos fluxos carregam 62% do volume | **Onde investir.** A cidade tem um esqueleto de comunicação bem definido — prioridade natural para infraestrutura e redundância de telecom. |
+| 5 macro-regiões funcionais e contíguas | **A cidade real vs. a cidade administrativa.** Os fluxos revelam agrupamentos de bairros que funcionam como unidade; comparar com as divisões oficiais mostra onde o desenho administrativo não acompanha a vida cotidiana. |
+| Gravidade: fluxo cai com d^1,09 | **A distância ainda governa a interação** — e os resíduos apontam laços entre bairros distantes que indicam dependências de trabalho ou origem em comum. |
+| Robustez: degradação gradual, sem colapso | **Resiliência.** A rede não se parte ao perder uma área, mas perde capacidade de forma desigual: as regiões de maior volume merecem redundância prioritária. |
 
 ---
 
-## 6. Sugestão de narrativa (5 atos)
+## 7. Sugestão de narrativa (5 atos)
 
-1. **Quem é Campinas nos dados** — tamanho da rede, cobertura, o que cada nó/antena representa.
-2. **A cidade se comunica localmente** — decaimento com a distância + comunidades concentradas no
-   mapa (Voronoi).
-3. **A cidade é socialmente segmentada** — homofilia socioeconômica de ≈ 1,9× (gráfico observado vs
-   acaso + matriz de mistura). *Este é o achado de maior apelo "de prefeito".*
-4. **A cidade tem pontos críticos** — hubs (centralidades no mapa) + curva de robustez (ataque vs
-   falha).
-5. **Que tipo de cidade-rede é esta** — síntese: rede social de cauda pesada, modular, small-world e
-   assortativa; o que isso implica para políticas públicas.
-
----
-
-## 7. Estado de completude e possíveis aprofundamentos
-
-**Já completo:** EDA + construção de dados; topologia (grau, componentes, clustering, centralidades,
-comunidades); espacial (Voronoi, comunidades no mapa, decaimento, homofilia socioeconômica, rede de
-antenas, hubs); avançado (scale-free, assortatividade, k-core, small-world, robustez). Todos os
-notebooks executam de ponta a ponta no env `sistemas-complexos`, com figuras embutidas.
-
-**Aprofundamentos que fortaleceriam a apresentação (opcionais):**
-- Homofilia socioeconômica **por região do mapa** (onde a segregação é maior?).
-- Quintil dos **hubs** (os mais conectados são de quais estratos?).
-- Modelo de **gravidade** formal (intensidade ~ f(distância, tamanho)) ou ajuste do decaimento.
-- Small-world com **modelo de configuração** (preservando a sequência de graus) além do Erdős–Rényi.
-- **Rich-club** (os hubs formam um clube?).
-- Tabela final de **"top corredores entre regiões"** com nomes de bairros, se houver geocodificação.
+1. **O que estamos olhando** — 145 regiões, 25 mil moradores agregados, o que é um nó e uma aresta.
+2. **A cidade tem um esqueleto** — backbone: 11% dos fluxos, 62% do volume, no mapa.
+3. **A cidade se divide sozinha** — as 5 macro-regiões funcionais saem contíguas sem o algoritmo
+   saber geografia. *Melhor figura da apresentação.*
+4. **A segregação tem endereço** — o gráfico de três barras (observado / acaso entre pessoas / acaso
+   entre regiões) e o índice de auto-preferência por quintil. *Este é o ato principal.*
+5. **O que a cidade aguenta** — robustez, rich-club e a lista de regiões críticas.
 
 ---
 
 ## 8. Notas técnicas (reprodutibilidade)
 
-- **Ambiente:** conda `sistemas-complexos` (numpy 2.4, pandas 3.0, networkx 3.6, geopandas, shapely,
-  scipy, contextily, seaborn). `contextily` baixa o basemap → precisa de internet.
-- **Determinismo:** Louvain e amostragens usam `seed=42`/`random_state` fixos; os números acima
-  reproduzem ao reexecutar.
-- **Caveats:** betweenness e caminho médio são **amostrados** (rede grande); o pacote `powerlaw` não
-  está instalado, então o ajuste scale-free é uma implementação MLE (Clauset) própria; há 18
-  self-loops (autochamadas) removidos nas métricas estruturais; as células de mapa do NB3 baixam
-  tiles (mais lentas).
-- **Para refazer tudo:** rodar `1-eda` (gera os parquets, exige `residencias.csv`) e depois 2→3→4 em
-  qualquer ordem.
+- **Ambiente:** `.venv` com Python 3.13 (uv). `contextily` baixa o basemap → precisa de internet;
+  use `--no-basemap` para rodar offline.
+- **Execução:** `python main.py --city campinas --analyses all` (~30 s). Saída em
+  `output/campinas/` (figuras, `metrics.json`, `report.md`).
+- **Determinismo:** Louvain, permutações e amostragens usam `seed=42`.
+- **Caveat importante (verificar antes de apresentar):** as 145 antenas estão todas marcadas com
+  `residence_city == "Campinas"`, mas se espalham por **48 × 39 km**, com 46 delas a mais de 15 km do
+  centro — o mapa mostra pontos em Americana, Santa Bárbara d'Oeste, Sumaré, Hortolândia, Paulínia,
+  Valinhos e Jaguariúna. Ou o campo `residence_city` designa a **região metropolitana**, ou as
+  geometrias são anonimizadas de forma grosseira. Isso não invalida nenhuma análise, mas muda o
+  enquadramento: provavelmente estamos falando da **RMC**, não do município. Vale confirmar com o
+  professor.
+- **Outros caveats:** o modelo nulo de homofilia é uma permutação de rótulos (não controla o espaço
+  explicitamente); o R² da gravidade (0,27) é típico, mas indica que a maior parte da variação dos
+  fluxos não é explicada por tamanho e distância.
 
 ---
 
 ## 9. Glossário rápido
 
-- **Componente gigante:** maior subconjunto de nós todos alcançáveis entre si (aqui, 72% da rede).
-- **Comunidade / modularidade:** grupos densamente conectados internamente; modularidade alta (0,98)
-  = divisão muito nítida.
-- **Centralidade / hub:** medida de importância de um nó; hub = nó muito central/conectado.
-- **Homofilia:** tendência de se conectar com semelhantes (aqui, mesmo quintil socioeconômico).
-- **Assortatividade:** correlação de grau entre vizinhos (positiva = hubs com hubs).
-- **k-core:** maior subgrafo onde todo nó tem grau ≥ k (mede núcleo/coesão).
-- **Small-world (σ):** alto clustering + caminhos curtos vs. rede aleatória; σ ≫ 1 confirma.
-- **Quintil:** faixa socioeconômica (q1 = 20% mais pobres … q5 = 20% mais ricos).
+- **Insularidade:** fração do volume de uma região que não sai dela.
+- **Backbone / filtro de disparidade:** subconjunto dos fluxos estatisticamente significativos, dado
+  o peso que cada nó reparte entre seus vizinhos (Serrano et al., 2009).
+- **s-core:** k-core generalizado para pesos — poda por força em vez de grau.
+- **Macro-região funcional:** grupo de antenas que conversam mais entre si do que com o resto.
+- **Modelo de gravidade:** fluxo ≈ (tamanho × tamanho) / distância^b.
+- **Rich-club ponderado:** as regiões de maior força concentram volume entre si? (ρ > 1 = sim.)
+- **Eficiência ponderada:** média das inversas dos caminhos mínimos, usando 1/peso como custo.
+- **Quintil:** faixa socioeconômica da região (q1 = 20% mais pobres … q5 = 20% mais ricos).
+- **Falácia ecológica:** concluir sobre indivíduos a partir de dados agregados por região.

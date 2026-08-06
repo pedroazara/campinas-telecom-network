@@ -1,41 +1,24 @@
-"""Construção do grafo da rede de chamadas (lógica comum aos notebooks 2–4)."""
+"""Agregação no nível dos usuários — insumo para a construção da rede de regiões.
+
+Estas funções são o passo intermediário entre a tabela bruta de chamadas e a rede de antenas
+montada em :mod:`src.antenna`: elas juntam as chamadas A→B e B→A num único par e descobrem em
+que antena cada usuário mora. O grafo de usuários em si não é mais construído — a unidade de
+análise do projeto é a antena.
+"""
 
 from __future__ import annotations
 
-import random
-
 import numpy as np
 import pandas as pd
-import networkx as nx
-
-
-def average_clustering_fast(G: nx.Graph, max_exact: int = 60_000,
-                            n_sample: int = 3000, seed: int = 42) -> float:
-    """Clustering médio; em grafos grandes usa amostragem de nós.
-
-    O clustering exato é O(Σ grau²): em redes com hubs enormes (cidades grandes) ele
-    é inviável. Amostrar nós dá uma estimativa estável e rápida.
-    """
-    n = G.number_of_nodes()
-    if n == 0:
-        return 0.0
-    if n <= max_exact:
-        return nx.average_clustering(G)
-    rng = random.Random(seed)
-    sample = rng.sample(list(G.nodes()), min(n_sample, n))
-    return nx.average_clustering(G, nodes=sample)
 
 
 def build_edges_graph(edges_df: pd.DataFrame) -> pd.DataFrame:
-    """Agrega arestas dirigidas A→B e B→A no mesmo par não-direcionado.
-
-    O peso é ``log1p(q_calls) * log1p(calls_duration_total)``.
-    """
+    """Agrega arestas dirigidas A→B e B→A no mesmo par não-direcionado de usuários."""
     e = edges_df.copy()
     e["source"] = np.minimum(e["id_emisor"].astype(str), e["id_receiver"].astype(str))
     e["target"] = np.maximum(e["id_emisor"].astype(str), e["id_receiver"].astype(str))
 
-    edges_graph = (
+    return (
         e.groupby(["source", "target"], as_index=False)
         .agg(
             q_calls=("q_calls", "sum"),
@@ -44,43 +27,6 @@ def build_edges_graph(edges_df: pd.DataFrame) -> pd.DataFrame:
             residence_distance_km=("residence_distance_km", "mean"),
         )
     )
-    edges_graph["weight"] = (
-        np.log1p(edges_graph["q_calls"]) * np.log1p(edges_graph["calls_duration_total"])
-    )
-    return edges_graph
-
-
-def build_graph(edges_df: pd.DataFrame, config: dict | None = None) -> nx.Graph:
-    """Constrói o grafo não-direcionado ponderado a partir das arestas por antena."""
-    edges_graph = build_edges_graph(edges_df)
-    G = nx.from_pandas_edgelist(
-        edges_graph,
-        source="source",
-        target="target",
-        edge_attr=[
-            "weight",
-            "q_calls",
-            "calls_duration_total",
-            "avg_duration_per_call",
-            "residence_distance_km",
-        ],
-    )
-    if config and config.get("graph", {}).get("remove_self_loops"):
-        # self-loops são tratados nas métricas estruturais; aqui mantemos o grafo bruto.
-        pass
-    return G
-
-
-def get_main_component(G: nx.Graph) -> nx.Graph:
-    """Retorna a componente gigante (maior componente conexa) como cópia independente."""
-    return G.subgraph(max(nx.connected_components(G), key=len)).copy()
-
-
-def remove_self_loops(G: nx.Graph) -> nx.Graph:
-    """Retorna uma cópia de G sem self-loops (autochamadas)."""
-    H = G.copy()
-    H.remove_edges_from(list(nx.selfloop_edges(H)))
-    return H
 
 
 def build_user_antenna_map(edges_df: pd.DataFrame) -> pd.Series:

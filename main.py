@@ -22,7 +22,7 @@ from networkx.algorithms.community import louvain_communities
 
 from src.utils import load_config, setup_logging, CONFIG_DIR
 from src.exporter import Exporter
-from src import graph_builder
+from src import antenna as antenna_module
 from src.pipeline import eda as eda_module, topology, spatial, advanced
 
 ANALYSES = ["eda", "topology", "spatial", "advanced"]
@@ -74,24 +74,23 @@ def run_city(city: str, args: argparse.Namespace, log) -> None:
         exporter.save_data(edges_antenna, "edges_antenna.parquet")
         exporter.save_data(antennas, "antennas.parquet")
 
-    G = graph_builder.build_graph(edges_antenna, config)
-    G_main = graph_builder.get_main_component(G)
-    log.info("Grafo: %d nós / %d arestas | gigante: %d nós",
-             G.number_of_nodes(), G.number_of_edges(), G_main.number_of_nodes())
+    # A unidade de análise é a antena: as pessoas viram atributos agregados da região.
+    net = antenna_module.build(edges_antenna, antennas, config)
 
-    # Louvain é caro em cidades grandes; calcula uma única vez e compartilha.
     communities = None
     if requested & {"topology", "spatial"}:
-        log.info("Detectando comunidades (Louvain)...")
-        communities = louvain_communities(G_main, weight="weight", seed=42)
-        log.info("%d comunidades detectadas", len(communities))
+        log.info("Detectando macro-regiões nos fluxos (Louvain ponderado)...")
+        communities = louvain_communities(net.G, weight="weight", seed=42)
+        log.info("%d macro-regiões detectadas", len(communities))
 
+    nodes = net.nodes
     if "topology" in requested:
-        topology.run(G, G_main, config, exporter, communities=communities)
+        result = topology.run(net, config, exporter, communities=communities)
+        nodes = result.get("nodes", nodes)
     if "spatial" in requested:
-        spatial.run(G_main, antennas, edges_antenna, config, exporter, communities=communities)
+        spatial.run(net, config, exporter, communities=communities, nodes=nodes)
     if "advanced" in requested:
-        advanced.run(G_main, config, exporter)
+        advanced.run(net, edges_antenna, config, exporter)
 
     exporter.save_metrics()
     exporter.write_report()

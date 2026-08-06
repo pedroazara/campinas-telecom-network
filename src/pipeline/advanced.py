@@ -1,7 +1,16 @@
-"""Métricas estruturais avançadas de redes complexas (lógica do notebook 4).
+"""Análises estruturais da rede de regiões: robustez, rich-club e efeito da agregação.
 
-Todas as análises têm guardas para não quebrar em cidades pequenas (poucos nós/grau baixo)
-nem em cidades muito grandes.
+Substitui o módulo antigo (lei de potência, small-world contra Erdős–Rényi, k-core,
+fragmentação da componente gigante). Nenhuma dessas métricas sobrevive à mudança de unidade:
+com 145 nós e densidade 0,56 não há cauda de grau para ajustar, o caminho médio já é ~1,4
+e a rede simplesmente não fragmenta. O que substitui cada uma:
+
+- fragmentação  →  perda de **eficiência ponderada** ao remover regiões
+- k-core        →  s-core (em `topology`) e **rich-club por força** aqui
+- lei de potência →  desigualdade de volume (Gini/Lorenz, em `topology`)
+
+A última seção compara o nível individual com o regional — é a defesa contra a falácia
+ecológica e, no caso de Campinas, muda a leitura do principal achado do projeto.
 """
 
 from __future__ import annotations
@@ -10,259 +19,258 @@ import logging
 import random
 
 import numpy as np
-import networkx as nx
 import pandas as pd
+import networkx as nx
 import matplotlib.pyplot as plt
 
-from ..graph_builder import remove_self_loops, average_clustering_fast
+from ..antenna import weighted_global_efficiency
+from ..graph_builder import build_edges_graph, build_user_antenna_map
 
 logger = logging.getLogger("pipeline")
 
-# acima deste tamanho, evitamos as operações mais caras (rich-club normalizado)
-BIG_GRAPH = 150_000
 
-
-def fit_powerlaw_discrete(x: np.ndarray) -> dict | None:
-    """Ajuste MLE de lei de potência discreta com varredura de x_min (método de Clauset)."""
-    x = np.asarray(x)
-    x = x[x > 0]
-    if len(x) < 50 or x.max() < 4:
-        return None
-    best = None
-    for xmin in range(1, int(x.max())):
-        tail = x[x >= xmin]
-        if len(tail) < 30:
-            break
-        alpha = 1 + len(tail) / np.sum(np.log(tail / (xmin - 0.5)))
-        xs = np.sort(tail)
-        cdf_emp = np.arange(1, len(xs) + 1) / len(xs)
-        cdf_fit = 1 - (xs / xmin) ** (-(alpha - 1))
-        ks = np.max(np.abs(cdf_emp - cdf_fit))
-        if best is None or ks < best["ks"]:
-            best = {"xmin": int(xmin), "alpha": float(alpha), "n_tail": int(len(tail)), "ks": float(ks)}
-    return best
-
-
-def _avg_shortest_path_sampled(G: nx.Graph, n_samples: int = 500, seed: int = 42) -> float:
-    rng = random.Random(seed)
-    nodes = list(G.nodes())
-    total = count = 0
-    for s in rng.sample(nodes, min(n_samples, len(nodes))):
-        lengths = nx.single_source_shortest_path_length(G, s)
-        total += sum(lengths.values())
-        count += len(lengths) - 1
-    return total / count if count else float("nan")
-
-
-def _giant_fraction_curve(G: nx.Graph, removal_order, max_frac=0.6, steps=25):
-    N = G.number_of_nodes()
-    all_nodes = set(G.nodes())
+# --------------------------------------------------------------------------- robustez
+def _efficiency_curve(G: nx.Graph, order: list, max_frac: float = 0.6, steps: int = 20):
+    """Eficiência ponderada (relativa à rede intacta) conforme regiões são removidas."""
+    n = G.number_of_nodes()
+    base = weighted_global_efficiency(G)
     fracs = np.linspace(0, max_frac, steps)
     out = []
     for f in fracs:
-        k = int(f * N)
-        H = G.subgraph(all_nodes - set(removal_order[:k]))
-        gc = max((len(c) for c in nx.connected_components(H)), default=0)
-        out.append(gc / N)
-    return fracs, out
+        k = int(f * n)
+        H = G.subgraph([node for node in G.nodes() if node not in set(order[:k])])
+        out.append(weighted_global_efficiency(H) / base if base > 0 else np.nan)
+    return fracs, np.array(out)
 
 
-def _rich_club(Gm: nx.Graph, G_rand: nx.Graph, exporter, city_name: str) -> dict:
-    """Coeficiente rich-club φ(k) da rede vs. um grafo aleatório equivalente.
+def _robustness(G: nx.Graph, config: dict, exporter, city_name: str) -> dict:
+    """Ataque dirigido às regiões de maior volume vs. perda aleatória de regiões."""
+    if G.number_of_nodes() < 5 or G.number_of_edges() == 0:
+        logger.warning("[advanced] rede pequena demais — robustez pulada")
+        return {}
 
-    ρ(k) = φ_real(k) / φ_rand(k) > 1 para k alto indica que os hubs formam um 'clube'.
+    steps = int(config.get("advanced", {}).get("robustness_steps", 20))
+    strength_order = [u for u, _ in sorted(G.degree(weight="weight"), key=lambda kv: -kv[1])]
+    random_order = list(G.nodes())
+    random.Random(1).shuffle(random_order)
+
+    fracs, attack = _efficiency_curve(G, strength_order, steps=steps)
+    _, failure = _efficiency_curve(G, random_order, steps=steps)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.plot(fracs, attack, "o-", color="crimson", label="perda das regiões de maior volume")
+    ax.plot(fracs, failure, "s-", color="steelblue", label="perda aleatória de regiões")
+    ax.axhline(0.5, color="gray", ls=":", lw=1)
+    ax.set_xlabel("fração das regiões removidas")
+    ax.set_ylabel("eficiência de comunicação (relativa à rede intacta)")
+    ax.set_title(f"Robustez da rede de regiões — {city_name}")
+    ax.legend()
+    exporter.save_figure(fig, "robustness", "advanced")
+
+    def _collapse(curve):
+        hit = [f for f, y in zip(fracs, curve) if y < 0.5]
+        return float(hit[0]) if hit else None
+
+    return {
+        "efficiency_attack_collapse": _collapse(attack),
+        "efficiency_failure_collapse": _collapse(failure),
+        "efficiency_gap_at_20pct": float(
+            np.interp(0.2, fracs, failure) - np.interp(0.2, fracs, attack)
+        ),
+    }
+
+
+# --------------------------------------------------------------------------- rich-club
+def _weighted_rich_club(G: nx.Graph, exporter, city_name: str, n_reps: int = 50) -> dict:
+    """Rich-club ponderado (Opsahl et al., 2008): as regiões mais ativas falam entre si?
+
+    φ^w(r) = peso trocado entre os nós de força acima de *r*, dividido pelo peso que essas
+    mesmas ligações teriam se levassem as arestas mais pesadas da rede. O nulo embaralha os
+    pesos sobre a mesma topologia — apropriado aqui, já que a topologia é quase completa e
+    toda a informação está nos pesos.
     """
-    try:
-        phi_real = nx.rich_club_coefficient(Gm, normalized=False)
-        phi_rand = nx.rich_club_coefficient(G_rand, normalized=False)
-    except Exception as exc:
-        logger.warning("[advanced] rich-club não calculado (%s)", exc)
+    if G.number_of_edges() < 20:
         return {}
 
-    ks = sorted(k for k in phi_real if k in phi_rand and phi_rand[k] > 0)
-    if len(ks) < 3:
-        return {}
-    ratio = np.array([phi_real[k] / phi_rand[k] for k in ks])
+    weights = np.array([d["weight"] for _, _, d in G.edges(data=True)], dtype=float)
+    sorted_w = np.sort(weights)[::-1]
+    strength = dict(G.degree(weight="weight"))
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
-    axes[0].plot(ks, [phi_real[k] for k in ks], "o-", color="crimson", label="rede real")
-    axes[0].plot(ks, [phi_rand[k] for k in ks], "s-", color="steelblue", label="aleatória")
-    axes[0].set_xlabel("grau  k")
-    axes[0].set_ylabel("φ(k)")
-    axes[0].set_title("Coeficiente rich-club")
+    def phi_curve(edge_weights: dict) -> tuple[np.ndarray, np.ndarray]:
+        s = {node: 0.0 for node in G.nodes()}
+        for (u, v), w in edge_weights.items():
+            s[u] += w
+            s[v] += w
+        ranks = np.unique(np.quantile(list(s.values()), np.linspace(0.1, 0.95, 25)))
+        phis = []
+        for r in ranks:
+            club = {node for node, value in s.items() if value > r}
+            inside = [w for (u, v), w in edge_weights.items() if u in club and v in club]
+            if len(inside) < 3:
+                phis.append(np.nan)
+                continue
+            top = np.sort(np.fromiter(edge_weights.values(), dtype=float))[::-1][: len(inside)]
+            phis.append(float(np.sum(inside) / np.sum(top)) if top.sum() else np.nan)
+        return ranks, np.array(phis)
+
+    observed = {(u, v): d["weight"] for u, v, d in G.edges(data=True)}
+    ranks, phi_real = phi_curve(observed)
+
+    rng = np.random.default_rng(42)
+    keys = list(observed)
+    null_curves = []
+    for _ in range(n_reps):
+        shuffled = dict(zip(keys, rng.permutation(list(observed.values()))))
+        null_curves.append(phi_curve(shuffled)[1])
+    stacked = np.vstack(null_curves)
+    # em cidades pequenas alguns limiares não têm clube nenhum: a coluna é toda NaN
+    phi_null = np.full(stacked.shape[1], np.nan)
+    usable = ~np.all(np.isnan(stacked), axis=0)
+    phi_null[usable] = np.nanmean(stacked[:, usable], axis=0)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rho = phi_real / phi_null
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+    axes[0].plot(ranks, phi_real, "o-", color="crimson", label="rede real")
+    axes[0].plot(ranks, phi_null, "s-", color="steelblue", label="pesos embaralhados")
+    axes[0].set_xlabel("limiar de força  r (chamadas)")
+    axes[0].set_ylabel("φ$^w$(r)")
+    axes[0].set_title("Rich-club ponderado")
     axes[0].legend()
     axes[1].axhline(1.0, color="gray", ls="--", lw=1)
-    axes[1].plot(ks, ratio, "o-", color="purple")
-    axes[1].set_xlabel("grau  k")
-    axes[1].set_ylabel("ρ(k) = φ_real / φ_rand")
-    axes[1].set_title("Rich-club normalizado (ρ>1 = clube de hubs)")
+    axes[1].plot(ranks, rho, "o-", color="purple")
+    axes[1].set_xlabel("limiar de força  r")
+    axes[1].set_ylabel("ρ(r) = φ real / φ nulo")
+    axes[1].set_title("ρ > 1 indica clube das regiões mais ativas")
     fig.tight_layout()
     exporter.save_figure(fig, "rich_club", "advanced")
 
-    # razão no topo da distribuição de grau (média do quarto superior de k)
-    top = ratio[int(0.75 * len(ratio)):]
-    return {"rich_club_ratio_high_k": float(np.nanmean(top))}
+    top_rho = rho[~np.isnan(rho)][-max(1, len(rho) // 4):]
+    return {"rich_club_ratio_high_strength": float(np.mean(top_rho))} if len(top_rho) else {}
 
 
-def run(G_main: nx.Graph, config: dict, exporter) -> dict:
-    """Calcula e exporta lei de potência, assortatividade/k-core, small-world, robustez e rich-club."""
-    logger.info("[advanced] scale-free, assortatividade/k-core, small-world, robustez, rich-club")
-    adv = config.get("advanced", {})
-    steps = adv.get("robustness_steps", 50)
-    sp_sample = adv.get("shortest_path_sample", 500)
+# --------------------------------------------------------------------------- agregação
+def _individual_vs_regional(edges_antenna: pd.DataFrame, net, exporter, city_name: str) -> dict:
+    """Compara a homofilia socioeconômica no nível da pessoa e no nível da região.
 
-    Gm = remove_self_loops(G_main)
-    n_nodes, n_edges = Gm.number_of_nodes(), Gm.number_of_edges()
-    degree = np.array([d for _, d in Gm.degree()]) if n_nodes else np.array([0])
+    O achado antigo — "49% das chamadas ligam pessoas do mesmo quintil, contra 26% ao acaso"
+    — usava um nulo que embaralha o quintil **entre pessoas**, destruindo junto o fato de que
+    vizinhos compartilham o quintil por morarem no mesmo lugar. Repetindo a conta com um nulo
+    que embaralha o quintil **entre regiões** (preservando quem mora com quem), separa-se o
+    que é preferência social do que é simples proximidade territorial.
+    """
+    quintile_by_antenna = net.nodes.set_index("antenna_id")["residence_quintile_state"]
+    user_antenna = build_user_antenna_map(edges_antenna)
+    user_quintile = user_antenna.map(quintile_by_antenna)
+
+    pairs = build_edges_graph(edges_antenna)
+    pairs["q_source"] = pairs["source"].map(user_quintile)
+    pairs["q_target"] = pairs["target"].map(user_quintile)
+    pairs = pairs.dropna(subset=["q_source", "q_target"])
+    if pairs.empty or pairs["q_source"].nunique() < 2:
+        return {}
+
+    w = pairs["q_calls"].to_numpy(dtype=float)
+    total = w.sum()
+    observed = float(w[(pairs["q_source"] == pairs["q_target"]).to_numpy()].sum() / total)
+
+    rng = np.random.default_rng(42)
+
+    # nulo 1 — embaralha o quintil entre pessoas (o do pipeline antigo)
+    users = pd.Index(user_quintile.index)
+    codes = user_quintile.to_numpy()
+    si, ti = users.get_indexer(pairs["source"]), users.get_indexer(pairs["target"])
+    valid = (si >= 0) & (ti >= 0)
+    null_user = float(np.mean([
+        w[valid][perm[si[valid]] == perm[ti[valid]]].sum() / total
+        for perm in (rng.permutation(codes) for _ in range(50))
+    ]))
+
+    # nulo 2 — embaralha o quintil entre regiões, preservando a composição de cada antena
+    antennas = pd.Index(net.nodes["antenna_id"])
+    ant_codes = quintile_by_antenna.reindex(net.nodes["antenna_id"]).to_numpy()
+    ai = antennas.get_indexer(pairs["source"].map(user_antenna))
+    bi = antennas.get_indexer(pairs["target"].map(user_antenna))
+    ok = (ai >= 0) & (bi >= 0)
+    null_spatial = float(np.mean([
+        w[ok][perm[ai[ok]] == perm[bi[ok]]].sum() / total
+        for perm in (rng.permutation(ant_codes) for _ in range(50))
+    ]))
+
+    ratio_user = observed / null_user if null_user else float("nan")
+    ratio_spatial = observed / null_spatial if null_spatial else float("nan")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    labels = ["observado", "acaso\n(quintil entre pessoas)", "acaso\n(quintil entre regiões)"]
+    values = [observed, null_user, null_spatial]
+    bars = ax.bar(labels, values, color=["crimson", "lightgray", "steelblue"])
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, value + 0.01, f"{value:.0%}",
+                ha="center", fontsize=11)
+    ax.set_ylabel("fração do volume entre pessoas do mesmo quintil")
+    ax.set_ylim(0, max(values) * 1.25)
+    ax.set_title(f"Homofilia: preferência social ou proximidade territorial? — {city_name}")
+    exporter.save_figure(fig, "homophily_levels", "advanced")
+
+    return {
+        "individual_homophily_observed": observed,
+        "individual_homophily_null_by_user": null_user,
+        "individual_homophily_null_by_region": null_spatial,
+        "individual_homophily_ratio_naive": float(ratio_user),
+        "individual_homophily_ratio_spatial_null": float(ratio_spatial),
+    }
+
+
+# --------------------------------------------------------------------------- run
+def run(net, edges_antenna: pd.DataFrame, config: dict, exporter) -> dict:
+    """Robustez ponderada, rich-club por força e comparação entre níveis de agregação."""
+    logger.info("[advanced] robustez ponderada, rich-club, individual vs regional")
+    city_name = exporter.city_name
     metrics: dict = {}
 
-    # amostragem adaptativa ao tamanho; acima de HUGE, as métricas baseadas em BFS
-    # (caminho médio, robustez) são inviáveis e são puladas.
-    HUGE = 300_000
-    huge = n_nodes > HUGE
-    if n_nodes > 120_000:
-        sp_eff, steps_eff = 150, 25
-    else:
-        sp_eff, steps_eff = sp_sample, steps
-
-    # ---------------- 1. lei de potência ----------------
-    pl = fit_powerlaw_discrete(degree)
-    if pl is not None:
-        x = np.sort(np.unique(degree))
-        ccdf = np.array([np.mean(degree >= k) for k in x])
-        xmin, alpha = pl["xmin"], pl["alpha"]
-        xx = x[x >= xmin]
-        yy = np.mean(degree >= xmin) * (xx / xmin) ** (-(alpha - 1))
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.loglog(x, ccdf, "o", ms=5, alpha=0.7, label="CCDF empírica")
-        ax.loglog(xx, yy, "r-", lw=2, label=f"lei de potência (α={alpha:.2f}, x_min={xmin})")
-        ax.set_xlabel("grau  k")
-        ax.set_ylabel("P(K ≥ k)")
-        ax.set_title(f"Ajuste de lei de potência — {exporter.city_name}")
-        ax.legend()
-        exporter.save_figure(fig, "powerlaw_fit", "advanced")
-        metrics.update(powerlaw_alpha=pl["alpha"], powerlaw_xmin=pl["xmin"], powerlaw_ks=pl["ks"])
-    else:
-        logger.warning("[advanced] grau sem cauda suficiente — lei de potência pulada")
-
-    # ---------------- 2. assortatividade + k-core ----------------
-    try:
-        assort = float(nx.degree_assortativity_coefficient(Gm))
-    except Exception:
-        assort = float("nan")
-    if np.isfinite(assort):
-        metrics["assortativity"] = assort
-        knn = nx.average_degree_connectivity(Gm)
-        ks_knn = sorted(knn)
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.scatter(ks_knn, [knn[k] for k in ks_knn], s=30, alpha=0.8)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_xlabel("grau  k")
-        ax.set_ylabel("grau médio dos vizinhos  k_nn(k)")
-        ax.set_title(f"Mistura por grau (r = {assort:.2f})")
-        exporter.save_figure(fig, "assortativity", "advanced")
-
-    core = pd.Series(nx.core_number(Gm)) if n_edges else pd.Series([0])
-    kmax = int(core.max())
-    ks_core = list(range(0, kmax + 1))
-    core_sizes = [int((core >= k).sum()) for k in ks_core]
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
-    axes[0].hist(core, bins=range(0, kmax + 2), align="left", rwidth=0.8)
-    axes[0].set_xlabel("número do core (k)")
-    axes[0].set_ylabel("nós")
-    axes[0].set_title("Distribuição de k-core")
-    axes[1].plot(ks_core, core_sizes, "o-")
-    axes[1].set_yscale("log")
-    axes[1].set_xlabel("k")
-    axes[1].set_ylabel("nós no k-core (log)")
-    axes[1].set_title("Tamanho do núcleo")
-    fig.tight_layout()
-    exporter.save_figure(fig, "kcore", "advanced")
-    metrics.update(kcore_max=kmax, kcore_size=int((core == kmax).sum()))
-
-    # ---------------- 3. small-world ----------------
-    G_rand = None
-    if huge:
-        logger.warning("[advanced] grafo enorme (%d nós) — small-world pulado (BFS inviável)", n_nodes)
-    elif n_nodes > 3 and n_edges > 0:
-        C_real = average_clustering_fast(Gm)
-        L_real = _avg_shortest_path_sampled(Gm, sp_eff)
-        G_rand = nx.gnm_random_graph(n_nodes, n_edges, seed=42)
-        G_rand = G_rand.subgraph(max(nx.connected_components(G_rand), key=len)).copy()
-        C_rand = average_clustering_fast(G_rand)
-        L_rand = _avg_shortest_path_sampled(G_rand, sp_eff)
-        if C_rand > 0 and np.isfinite(L_real) and L_rand > 0:
-            sigma = (C_real / C_rand) / (L_real / L_rand)
-            fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-            axes[0].bar(["rede real", "aleatória"], [C_real, C_rand], color=["crimson", "steelblue"])
-            axes[0].set_yscale("log")
-            axes[0].set_ylabel("clustering médio (log)")
-            axes[0].set_title("Agrupamento local")
-            axes[1].bar(["rede real", "aleatória"], [L_real, L_rand], color=["crimson", "steelblue"])
-            axes[1].set_ylabel("caminho mínimo médio")
-            axes[1].set_title("Comprimento dos caminhos")
-            fig.tight_layout()
-            exporter.save_figure(fig, "smallworld", "advanced")
-            metrics.update(
-                smallworld_C_real=float(C_real), smallworld_C_rand=float(C_rand),
-                smallworld_L_real=float(L_real), smallworld_L_rand=float(L_rand),
-                smallworld_sigma=float(sigma),
-            )
-
-    # ---------------- 4. robustez ----------------
-    if huge:
-        logger.warning("[advanced] grafo enorme (%d nós) — robustez pulada (componentes conexas inviáveis)", n_nodes)
-    elif n_nodes > 0:
-        deg_order = [u for u, _ in sorted(Gm.degree(), key=lambda kv: -kv[1])]
-        rand_order = list(Gm.nodes())
-        random.Random(1).shuffle(rand_order)
-        fr, y_attack = _giant_fraction_curve(Gm, deg_order, steps=steps_eff)
-        _, y_random = _giant_fraction_curve(Gm, rand_order, steps=steps_eff)
-        fig, ax = plt.subplots(figsize=(7.5, 5))
-        ax.plot(fr, y_attack, "o-", color="crimson", label="ataque dirigido (maior grau)")
-        ax.plot(fr, y_random, "s-", color="steelblue", label="falha aleatória")
-        ax.set_xlabel("fração de nós removidos")
-        ax.set_ylabel("fração na componente gigante")
-        ax.set_title(f"Robustez: ataque vs. falha — {exporter.city_name}")
-        ax.legend()
-        exporter.save_figure(fig, "robustness", "advanced")
-        collapse = next((round(f, 3) for f, g in zip(fr, y_attack) if g < 0.5), None)
-        metrics["attack_collapse_fraction"] = collapse
-
-    # ---------------- 5. rich-club ----------------
-    if G_rand is not None and n_nodes <= BIG_GRAPH:
-        metrics.update(_rich_club(Gm, G_rand, exporter, exporter.city_name))
-    elif n_nodes > BIG_GRAPH:
-        logger.warning("[advanced] rede muito grande (%d nós) — rich-club pulado", n_nodes)
-
+    metrics.update(_robustness(net.G, config, exporter, city_name))
+    metrics.update(_weighted_rich_club(net.G, exporter, city_name))
+    metrics.update(_individual_vs_regional(edges_antenna, net, exporter, city_name))
     exporter.add_metrics("advanced", metrics)
 
-    # ---------------- relatório ----------------
     partes = []
-    if "powerlaw_alpha" in metrics:
+    if "efficiency_attack_collapse" in metrics:
+        collapse = metrics["efficiency_attack_collapse"]
+        gap = metrics.get("efficiency_gap_at_20pct")
+        if collapse is not None:
+            partes.append(
+                f"A rede de regiões **não fragmenta** — ela perde capacidade aos poucos. Removendo "
+                f"as regiões de maior volume, a eficiência de comunicação cai à metade com "
+                f"**{collapse:.0%}** das regiões fora; a perda aleatória é bem mais benigna "
+                f"(diferença de {gap:.0%} em favor do acaso com 20% removidas)."
+            )
+        else:
+            partes.append(
+                "A rede de regiões degrada suavemente: mesmo removendo as áreas de maior volume, "
+                "a eficiência de comunicação se mantém acima da metade em toda a faixa testada."
+            )
+    if "rich_club_ratio_high_strength" in metrics:
+        rc = metrics["rich_club_ratio_high_strength"]
+        verbo = "formam" if rc > 1.05 else "não formam"
         partes.append(
-            f"A distribuição de grau é de cauda pesada, com expoente **α ≈ {metrics['powerlaw_alpha']:.2f}** "
-            f"(x_min={metrics['powerlaw_xmin']}, KS={metrics['powerlaw_ks']:.2f})."
+            f"As regiões de maior tráfego **{verbo} um rich-club** (ρ ≈ {rc:.2f} no topo da "
+            f"distribuição de força)."
         )
-    if "assortativity" in metrics:
-        tipo = "assortativa" if metrics["assortativity"] > 0 else "disassortativa"
-        partes.append(f"É **{tipo}** (r = {metrics['assortativity']:+.2f}).")
-    partes.append(f"Núcleo máximo: **{kmax}-core** com {int((core == kmax).sum())} nós.")
-    if "smallworld_sigma" in metrics:
+    if "individual_homophily_ratio_naive" in metrics:
         partes.append(
-            f"É **small-world** (σ ≈ {metrics['smallworld_sigma']:.0f}: clustering "
-            f"{metrics['smallworld_C_real']:.3f} vs {metrics['smallworld_C_rand']:.4f} no aleatório)."
+            f"**Sobre a homofilia socioeconômica:** no nível das pessoas, "
+            f"{metrics['individual_homophily_observed']:.0%} do volume liga o mesmo quintil, contra "
+            f"{metrics['individual_homophily_null_by_user']:.0%} de um acaso que embaralha o quintil "
+            f"entre indivíduos (**{metrics['individual_homophily_ratio_naive']:.1f}×**). Mas esse nulo "
+            f"também destrói o fato de que vizinhos compartilham quintil por morarem no mesmo lugar. "
+            f"Com um acaso que embaralha o quintil **entre regiões**, o esperado sobe para "
+            f"{metrics['individual_homophily_null_by_region']:.0%} e a razão cai para "
+            f"**{metrics['individual_homophily_ratio_spatial_null']:.2f}×** — ou seja, a maior parte da "
+            f"“segregação socioeconômica na comunicação” é, na verdade, **segregação territorial**: "
+            f"as pessoas falam com quem está perto, e quem está perto tem a mesma renda."
         )
-    if metrics.get("attack_collapse_fraction") is not None:
-        partes.append(
-            f"Sob ataque aos hubs a componente gigante cai abaixo de 50% com "
-            f"~{metrics['attack_collapse_fraction']:.0%} de remoção (robusta a falhas, frágil a ataques)."
-        )
-    if "rich_club_ratio_high_k" in metrics:
-        rc = metrics["rich_club_ratio_high_k"]
-        tem = "formam" if rc > 1.1 else "não formam"
-        partes.append(f"Os hubs **{tem} um rich-club** (ρ médio no topo ≈ {rc:.2f}).")
-    exporter.add_report_section("Análises avançadas", " ".join(partes))
+    if partes:
+        exporter.add_report_section("Robustez, rich-club e efeito da agregação", " ".join(partes))
 
     return {"metrics": metrics}

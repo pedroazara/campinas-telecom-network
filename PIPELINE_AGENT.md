@@ -1,5 +1,12 @@
 # Instruções para o Agente de IA — Pipeline de Produção Multi-Cidade
 
+> ⚠️ **Documento histórico — especificação já cumprida e depois superada.**
+> Ele descreve o pipeline com **o usuário como unidade de análise**. A partir da branch
+> `rede-antenas`, a unidade passou a ser a **antena (região)**, e as análises citadas aqui
+> (lei de potência, small-world, k-core, componente gigante, hubs individuais) foram removidas
+> por perderem sentido nessa escala. Para o estado atual, veja [`README.md`](README.md),
+> [`CLAUDE.md`](CLAUDE.md) e [`GUIA_INTERPRETACAO.md`](GUIA_INTERPRETACAO.md).
+
 > Este documento descreve o que o agente de IA deve construir na branch `feat/production-pipeline`.
 > O objetivo é transformar os notebooks exploratórios em um pipeline modular, configurável e
 > reutilizável para analisar redes telefônicas de **qualquer cidade**, exportando resultados

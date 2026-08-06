@@ -1,4 +1,10 @@
-"""Análise de topologia da rede (lógica do notebook 2-rede-complexa)."""
+"""Estrutura da rede de regiões (antenas).
+
+Substitui a antiga topologia da rede de usuários. Numa rede de 145 nós com densidade 0,56
+quase toda região fala com quase toda região, então **grau não distingue nada**: as análises
+aqui olham para peso (força, desigualdade), para o *backbone* dos fluxos realmente
+significativos e para a divisão da cidade em macro-regiões funcionais.
+"""
 
 from __future__ import annotations
 
@@ -10,122 +16,238 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from networkx.algorithms.community import louvain_communities, modularity
 
-from ..graph_builder import average_clustering_fast
+from ..antenna import s_core_levels
 
 logger = logging.getLogger("pipeline")
 
 
-def run(G: nx.Graph, G_main: nx.Graph, config: dict, exporter, communities=None) -> dict:
-    """Calcula e exporta as métricas de topologia da rede.
+def _gini(values: np.ndarray) -> float:
+    """Índice de Gini de uma distribuição não-negativa (0 = igual, 1 = tudo num nó só)."""
+    x = np.sort(np.asarray(values, dtype=float))
+    x = x[np.isfinite(x)]
+    if len(x) == 0 or x.sum() == 0:
+        return float("nan")
+    n = len(x)
+    index = np.arange(1, n + 1)
+    return float((2 * np.sum(index * x)) / (n * np.sum(x)) - (n + 1) / n)
 
-    `communities` pode ser fornecido pré-calculado (Louvain) para evitar recomputação.
+
+def _plot_strength(nodes: pd.DataFrame, exporter) -> dict:
+    """Distribuição do volume de chamadas por região e sua curva de Lorenz."""
+    volume = nodes["calls_total"].to_numpy(dtype=float)
+    gini = _gini(volume)
+
+    ordered = np.sort(volume)
+    cum_share = np.concatenate([[0], np.cumsum(ordered) / ordered.sum()])
+    pop_share = np.linspace(0, 1, len(ordered) + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    axes[0].hist(volume, bins=30, color="steelblue")
+    axes[0].set_xlabel("chamadas que tocam a região")
+    axes[0].set_ylabel("nº de regiões")
+    axes[0].set_title("Volume de chamadas por região")
+    axes[1].plot(pop_share, cum_share, "-", color="crimson", lw=2, label="observado")
+    axes[1].plot([0, 1], [0, 1], "--", color="gray", lw=1, label="igualdade perfeita")
+    axes[1].set_xlabel("fração das regiões (da menor para a maior)")
+    axes[1].set_ylabel("fração acumulada do volume")
+    axes[1].set_title(f"Curva de Lorenz — Gini = {gini:.2f}")
+    axes[1].legend()
+    fig.tight_layout()
+    exporter.save_figure(fig, "strength_distribution", "topology")
+
+    return {"volume_gini": gini}
+
+
+def _plot_backbone(G: nx.Graph, B: nx.Graph, alpha: float, exporter, city_name: str) -> dict:
+    """Compara o backbone por disparidade com um corte ingênuo pelos maiores fluxos.
+
+    Em volume os dois se equivalem; a diferença está em **quem** sobrevive. O corte por peso
+    absoluto apaga as regiões pequenas inteiras — elas nunca têm fluxos grandes. O filtro de
+    disparidade julga cada fluxo contra a força do próprio nó, então preserva o corredor
+    principal de um bairro pequeno tanto quanto o de um grande.
     """
-    logger.info("[topology] grau, componentes, clustering, centralidades, comunidades")
-    k_sample = config.get("advanced", {}).get("betweenness_sample_k", 500)
+    edges = sorted(G.edges(data=True), key=lambda e: -e[2]["weight"])
+    weights = np.array([d["weight"] for _, _, d in edges])
+    total_weight = weights.sum()
+    n_edges = len(edges)
 
-    # -------- métricas de grafo (rede completa) --------
-    n, m = G.number_of_nodes(), G.number_of_edges()
-    density = nx.density(G)
-    component_sizes = sorted((len(c) for c in nx.connected_components(G)), reverse=True)
-    giant = G_main.number_of_nodes()
-    exporter.add_metrics(
-        "graph",
-        {
-            "nodes": n,
-            "edges": m,
-            "density": density,
-            "n_components": len(component_sizes),
-            "giant_nodes": giant,
-            "giant_fraction_pct": round(100 * giant / n, 1),
-        },
-    )
+    b_edges = B.number_of_edges()
+    b_weight = sum(d["weight"] for _, _, d in B.edges(data=True))
+    edge_frac = b_edges / n_edges if n_edges else float("nan")
+    weight_frac = b_weight / total_weight if total_weight else float("nan")
 
-    # -------- distribuição de grau --------
-    degrees = np.array([d for _, d in G.degree()])
+    # cobertura: quantas regiões mantêm ao menos um fluxo em cada estratégia
+    fracs = np.linspace(0.02, 1.0, 40)
+    naive_coverage = []
+    for f in fracs:
+        keep = edges[: max(1, int(f * n_edges))]
+        naive_coverage.append(len({u for u, _, _ in keep} | {v for _, v, _ in keep}))
+    backbone_coverage = len([n for n, d in B.degree() if d > 0])
 
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.hist(degrees, bins=50, log=True)
-    ax.set_xlabel("grau")
-    ax.set_ylabel("frequência (escala log)")
-    ax.set_title(f"Distribuição de grau — {exporter.city_name}")
-    exporter.save_figure(fig, "degree_distribution", "topology")
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    axes[0].plot(np.arange(1, n_edges + 1) / n_edges, np.cumsum(weights) / total_weight,
+                 "-", color="gray", lw=2, label="corte pelos maiores fluxos")
+    axes[0].plot(edge_frac, weight_frac, "o", color="crimson", ms=10,
+                 label=f"filtro de disparidade (α={alpha})")
+    axes[0].set_xlabel("fração dos fluxos preservados")
+    axes[0].set_ylabel("fração do volume preservado")
+    axes[0].set_title("Volume retido")
+    axes[0].legend()
 
-    x = np.sort(np.unique(degrees))
-    ccdf = np.array([np.mean(degrees >= k) for k in x])
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.loglog(x, ccdf, "o", ms=4, alpha=0.7)
-    ax.set_xlabel("grau  k")
-    ax.set_ylabel("P(K ≥ k)")
-    ax.set_title("CCDF da distribuição de grau")
-    exporter.save_figure(fig, "ccdf", "topology")
+    axes[1].plot(fracs, naive_coverage, "-", color="gray", lw=2, label="corte pelos maiores fluxos")
+    axes[1].plot(edge_frac, backbone_coverage, "o", color="crimson", ms=10,
+                 label="filtro de disparidade")
+    axes[1].axhline(G.number_of_nodes(), color="black", ls=":", lw=1, label="todas as regiões")
+    axes[1].set_xlabel("fração dos fluxos preservados")
+    axes[1].set_ylabel("regiões com ao menos um fluxo")
+    axes[1].set_title("Cobertura do território")
+    axes[1].legend()
+    fig.suptitle(f"Backbone da rede de regiões — {city_name}")
+    fig.tight_layout()
+    exporter.save_figure(fig, "backbone", "topology")
 
-    # -------- clustering (amostrado em grafos grandes) --------
-    avg_clustering = average_clustering_fast(G)
-
-    # -------- centralidades (componente gigante) --------
-    # Em grafos enormes, betweenness/eigenvector são inviáveis (cada BFS custa dezenas de
-    # segundos); usamos grau e força, que identificam bem os hubs e são instantâneos.
-    n_main = G_main.number_of_nodes()
-    deg_c = dict(G_main.degree())
-    strength = dict(G_main.degree(weight="q_calls"))
-
-    if n_main > 300_000:
-        logger.warning("[topology] grafo enorme (%d nós) — betweenness/eigenvector pulados; hubs por grau e força", n_main)
-        betw = {n: float("nan") for n in G_main.nodes()}
-        eig = {n: float("nan") for n in G_main.nodes()}
-    else:
-        k_betw = min(k_sample, 150) if n_main > 120_000 else min(k_sample, n_main)
-        betw = nx.betweenness_centrality(G_main, k=k_betw, weight=None, seed=42)
-        if n_main > 120_000:
-            eig = {n: float("nan") for n in G_main.nodes()}
-        else:
-            try:
-                eig = nx.eigenvector_centrality(G_main, max_iter=1000, weight="weight")
-            except nx.PowerIterationFailedConvergence:
-                logger.warning("[topology] eigenvector não convergiu — NaN")
-                eig = {n: float("nan") for n in G_main.nodes()}
-
-    centralidades = pd.DataFrame({"user_id": list(G_main.nodes())})
-    centralidades["grau"] = centralidades["user_id"].map(deg_c)
-    centralidades["forca_chamadas"] = centralidades["user_id"].map(strength)
-    centralidades["intermediacao"] = centralidades["user_id"].map(betw)
-    centralidades["autovetor"] = centralidades["user_id"].map(eig)
-    exporter.save_data(
-        centralidades.sort_values("grau", ascending=False).head(20), "top_hubs.csv"
-    )
-
-    # -------- comunidades (Louvain — reaproveita se já calculado) --------
-    if communities is None:
-        communities = louvain_communities(G_main, weight="weight", seed=42)
-    Q = modularity(G_main, communities, weight="weight")
-    community_sizes = sorted((len(c) for c in communities), reverse=True)
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.hist(community_sizes, bins=30)
-    ax.set_xlabel("tamanho da comunidade")
-    ax.set_ylabel("número de comunidades")
-    ax.set_title(f"Comunidades (Louvain): {len(communities)} | modularidade {Q:.3f}")
-    exporter.save_figure(fig, "communities", "topology")
-
-    metrics = {
-        "degree_mean": float(degrees.mean()),
-        "degree_median": float(np.median(degrees)),
-        "degree_max": int(degrees.max()),
-        "avg_clustering": float(avg_clustering),
-        "n_communities": len(communities),
-        "largest_community": int(community_sizes[0]),
-        "modularity": float(Q),
+    return {
+        "backbone_alpha": alpha,
+        "backbone_edges": b_edges,
+        "backbone_edge_fraction": float(edge_frac),
+        "backbone_weight_fraction": float(weight_frac),
+        "backbone_density": float(nx.density(B)),
+        "backbone_regions_covered": int(backbone_coverage),
+        "naive_cut_regions_covered": int(np.interp(edge_frac, fracs, naive_coverage)),
     }
-    exporter.add_metrics("topology", metrics)
 
-    exporter.add_report_section(
-        "Topologia",
-        f"A rede tem **{n:,} nós** e **{m:,} arestas** (densidade {density:.2e}); a componente "
-        f"gigante reúne **{giant:,} nós ({100 * giant / n:.1f}%)**. A distribuição de grau é "
-        f"concentrada (mediana {np.median(degrees):.0f}, máximo {degrees.max()}), com clustering "
-        f"médio **{avg_clustering:.2f}** — bem acima do aleatório. O algoritmo de Louvain detecta "
-        f"**{len(communities)} comunidades** (a maior com {community_sizes[0]} usuários) e "
-        f"**modularidade {Q:.3f}**, indicando uma estrutura fortemente modular.",
+
+def _plot_score(G: nx.Graph, exporter, city_name: str) -> tuple[pd.Series, dict]:
+    """Decomposição s-core: o núcleo de regiões que concentra o tráfego."""
+    levels = s_core_levels(G)
+    if levels.max() == 0:
+        return levels, {}
+
+    grid = np.linspace(0, levels.max(), 40)
+    sizes = [int((levels >= t).sum()) for t in grid]
+    core_size = int((levels >= levels.max()).sum())
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.plot(grid, sizes, "o-", color="darkorange")
+    ax.set_xlabel("limiar de força (chamadas)")
+    ax.set_ylabel("regiões no s-core")
+    ax.set_title(f"Decomposição s-core — núcleo final com {core_size} regiões ({city_name})")
+    exporter.save_figure(fig, "score", "topology")
+
+    return levels, {"score_max_strength": float(levels.max()), "score_core_size": core_size}
+
+
+def _plot_balance(nodes: pd.DataFrame, reciprocity: float, exporter, city_name: str) -> None:
+    """Quanto cada região emite a mais do que recebe."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    axes[0].hist(nodes["net_balance"].dropna(), bins=25, color="teal")
+    axes[0].axvline(0, color="black", ls="--", lw=1)
+    axes[0].set_xlabel("balanço líquido  (emitidas − recebidas) / total")
+    axes[0].set_ylabel("nº de regiões")
+    axes[0].set_title(f"Balanço emissor/receptor (reciprocidade = {reciprocity:.2f})")
+    axes[1].hist(nodes["insularity"].dropna(), bins=25, color="indianred")
+    axes[1].set_xlabel("insularidade  (chamadas internas / total da região)")
+    axes[1].set_ylabel("nº de regiões")
+    axes[1].set_title("O quanto cada região fala consigo mesma")
+    fig.tight_layout()
+    exporter.save_figure(fig, "balance_insularity", "topology")
+
+
+def run(net, config: dict, exporter, communities=None) -> dict:
+    """Calcula e exporta a estrutura da rede de regiões."""
+    logger.info("[topology] força, backbone, macro-regiões, s-core, balanço")
+    city_name = exporter.city_name
+    G, B, nodes = net.G, net.backbone, net.nodes
+
+    n, m = G.number_of_nodes(), G.number_of_edges()
+    metrics: dict = {
+        "n_regions": n,
+        "n_flows": m,
+        "density": float(nx.density(G)) if n > 1 else float("nan"),
+        "n_users": int(nodes["n_users"].sum()),
+        "users_per_region_median": float(nodes["n_users"].median()),
+        "internal_call_share": float(net.internal_call_share),
+        "median_insularity": float(nodes["insularity"].median()),
+    }
+
+    if m == 0:
+        logger.warning("[topology] rede sem fluxos entre regiões — análises puladas")
+        exporter.add_metrics("topology", metrics)
+        return {"metrics": metrics, "communities": []}
+
+    metrics.update(_plot_strength(nodes, exporter))
+    metrics.update(_plot_backbone(G, B, net.alpha, exporter, city_name))
+
+    # -------- macro-regiões funcionais --------
+    # Louvain ponderado sobre os fluxos: quais conjuntos de antenas conversam mais entre si
+    # do que com o resto da cidade. É a regionalização que substitui as comunidades de usuários.
+    if communities is None:
+        communities = louvain_communities(G, weight="weight", seed=42)
+    Q = modularity(G, communities, weight="weight")
+    region_of = {a: i for i, com in enumerate(communities) for a in com}
+    sizes = sorted((len(c) for c in communities), reverse=True)
+
+    nodes = nodes.copy()
+    nodes["macro_region"] = nodes["antenna_id"].map(region_of)
+    metrics.update(
+        n_macro_regions=len(communities),
+        modularity=float(Q),
+        largest_macro_region=int(sizes[0]),
     )
 
-    return {"centralidades": centralidades, "metrics": metrics}
+    # -------- núcleo e periferia --------
+    levels, score_metrics = _plot_score(G, exporter, city_name)
+    metrics.update(score_metrics)
+    nodes["score_level"] = nodes["antenna_id"].map(levels)
+
+    # -------- assortatividade --------
+    # A assortatividade topológica é vazia numa rede quase completa (todo mundo liga para
+    # todo mundo); o que informa é se regiões de volume parecido se ligam mais — e a
+    # homofilia por quintil, que é ponderada por volume e fica no módulo espacial.
+    try:
+        metrics["assortativity_volume"] = float(nx.numeric_assortativity_coefficient(G, "calls_total"))
+    except Exception as exc:
+        logger.warning("[topology] assortatividade por volume não calculada (%s)", exc)
+    try:
+        metrics["assortativity_quintile_unweighted"] = float(
+            nx.attribute_assortativity_coefficient(G, "residence_quintile_state")
+        )
+    except Exception:
+        pass
+
+    # -------- direção dos fluxos --------
+    reciprocity = float(nx.reciprocity(net.D)) if net.D.number_of_edges() else float("nan")
+    metrics["reciprocity"] = reciprocity
+    _plot_balance(nodes, reciprocity, exporter, city_name)
+
+    exporter.save_data(nodes, "antenna_nodes.csv")
+    exporter.save_data(net.flows, "antenna_flows.csv")
+    exporter.save_data(
+        pd.DataFrame(
+            [(u, v, d["q_calls"], d["n_pairs"], round(d["dist_km"], 2)) for u, v, d in B.edges(data=True)],
+            columns=["a", "b", "q_calls", "n_pairs", "dist_km"],
+        ).sort_values("q_calls", ascending=False),
+        "backbone_flows.csv",
+    )
+
+    exporter.add_metrics("topology", metrics)
+    exporter.add_report_section(
+        "Estrutura da rede de regiões",
+        f"A cidade é descrita por **{n} regiões** (antenas) que reúnem "
+        f"**{metrics['n_users']:,} moradores** (mediana de {metrics['users_per_region_median']:.0f} por "
+        f"região) e trocam **{m:,} fluxos** — densidade **{metrics['density']:.2f}**, ou seja, mais da "
+        f"metade dos pares de regiões da cidade tem contato. Por isso o que separa um corredor real "
+        f"de ruído não é existir, é carregar peso: o **filtro de disparidade** guarda apenas "
+        f"**{metrics['backbone_edges']:,} fluxos ({metrics['backbone_edge_fraction']:.0%} do total)** e "
+        f"ainda preserva **{metrics['backbone_weight_fraction']:.0%} de todas as chamadas** — a cidade "
+        f"tem um esqueleto de comunicação bem definido, e ele cobre "
+        f"**{metrics.get('backbone_regions_covered', '—')} das {n} regiões** (um corte pelo peso bruto "
+        f"do mesmo tamanho deixaria de fora as áreas pequenas, alcançando só "
+        f"{metrics.get('naive_cut_regions_covered', '—')}). O volume é desigual entre regiões "
+        f"(**Gini {metrics.get('volume_gini', float('nan')):.2f}**) e o núcleo s-core final reúne "
+        f"**{metrics.get('score_core_size', '—')} regiões**. Os fluxos dividem {city_name} em "
+        f"**{len(communities)} macro-regiões funcionais** (modularidade {Q:.2f}, a maior com "
+        f"{sizes[0]} antenas) e são fortemente recíprocos (**{reciprocity:.0%}**): quem recebe, devolve.",
+    )
+
+    return {"metrics": metrics, "communities": communities, "nodes": nodes}

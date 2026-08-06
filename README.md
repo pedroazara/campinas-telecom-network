@@ -1,9 +1,19 @@
 # Caracterização de Redes Telefônicas Urbanas por Métodos de Redes Complexas
 
-Pipeline modular e configurável para analisar a **rede telefônica de qualquer cidade** a partir de
-dados anonimizados de chamadas cruzados com residência e quintis socioeconômicos. A análise
-caracteriza a estrutura social e espacial da cidade (topologia, comunidades, segregação
-socioeconômica, hubs, robustez) e exporta figuras, métricas e um relatório por cidade.
+Pipeline modular e configurável para analisar a **rede de comunicação entre as regiões de qualquer
+cidade**, a partir de dados anonimizados de chamadas cruzados com residência e quintis
+socioeconômicos. A análise caracteriza a estrutura espacial e social da cidade (corredores de fluxo,
+macro-regiões funcionais, gravidade, segregação, robustez) e exporta figuras, métricas e um
+relatório por cidade.
+
+> **A unidade de análise é a antena, não a pessoa.** Cada antena é uma **região** da cidade; os
+> moradores sob ela entram como atributos agregados do nó, e as chamadas entre dois moradores da
+> mesma antena viram a **insularidade** daquela região — não uma aresta.
+>
+> A rede resultante é pequena e densa (em Campinas: 145 nós, densidade 0,56), o que torna sem
+> sentido métricas que dependem de cauda de grau — lei de potência, small-world contra
+> Erdős–Rényi, k-core, componente gigante. Elas foram substituídas por análises de **peso**,
+> **espaço** e **backbone**. Veja a tabela em [`CLAUDE.md`](CLAUDE.md#5-o-que-saiu-da-análise-e-por-quê).
 
 ## Pipeline de produção
 
@@ -17,9 +27,10 @@ python main.py --city campinas --no-basemap          # modo offline (sem tiles)
 
 Cidades já configuradas: **campinas, lavras, cabofrio, divinopolis, fortaleza**.
 
-> ⚠️ **Fortaleza** tem ~750 mil usuários: a execução é lenta (~15–20 min) e as métricas que exigem
-> percorrer a rede inteira (**betweenness, small-world, robustez, rich-club**) são puladas
-> automaticamente por serem inviáveis nesse tamanho — as demais análises saem completas.
+> ⚠️ **Fortaleza** tem ~750 mil usuários. A agregação por antena reduz muito o custo das análises
+> (a rede de regiões é sempre pequena), mas a **EDA inicial** — expandir a base e cruzar com o
+> `residencias.csv` de ~1 GB — continua lenta na primeira execução. Depois disso os parquets por
+> antena ficam em cache em `dados/`.
 
 > **Como interpretar os resultados:** veja [`GUIA_INTERPRETACAO.md`](GUIA_INTERPRETACAO.md), escrito
 > para quem vai analisar os dados (explica cada figura, métrica e tabela).
@@ -38,12 +49,16 @@ Argumentos:
 
 ```
 output/campinas/
-├── data/      edges_antenna.parquet, antennas.parquet, top_hubs.csv, antenna_flows.csv
+├── data/      antenna_nodes.csv, antenna_flows.csv, backbone_flows.csv,
+│              gravity_top_residuals.csv, edges_antenna.parquet, antennas.parquet
 ├── figures/
-│   ├── topology/   degree_distribution.png, ccdf.png, communities.png
-│   ├── spatial/    voronoi_map.png, homophily_matrix.png, distance_decay.png,
-│   │               antenna_network.png, hubs_map.png
-│   └── advanced/   powerlaw_fit.png, assortativity.png, kcore.png, smallworld.png, robustness.png
+│   ├── topology/   strength_distribution.png, backbone.png, score.png,
+│   │               balance_insularity.png
+│   ├── spatial/    voronoi_quintile.png, macro_regions_map.png, insularity_map.png,
+│   │               net_balance_map.png, calls_per_user_map.png, flows_all.png,
+│   │               flows_backbone.png, gravity_model.png, gravity_residuals.png,
+│   │               homophily.png
+│   └── advanced/   robustness.png, rich_club.png, homophily_levels.png
 └── summary/   metrics.json   (todas as métricas)
             report.md      (relatório com tabela de métricas + tradução "para o prefeito")
 ```
@@ -75,16 +90,17 @@ Se os parquets por antena ainda não existirem, o módulo de EDA os gera a parti
 
 ```
 ├── src/
-│   ├── graph_builder.py      # constrói o grafo (comum a todas as análises)
-│   ├── exporter.py           # salva figuras, métricas (JSON) e relatório (Markdown)
+│   ├── antenna.py            # rede de regiões: nós, fluxos, backbone, gravidade, s-core
+│   ├── graph_builder.py      # agregação de pares de usuários (insumo da rede de regiões)
+│   ├── exporter.py           # figuras/métricas/relatório + InlineExporter para notebooks
 │   ├── utils.py              # load_config, logging, criação de pastas
 │   └── pipeline/
 │       ├── eda.py            # gera os parquets por antena (a partir do residencias.csv)
-│       ├── topology.py       # grau, componentes, clustering, centralidades, comunidades
-│       ├── spatial.py        # Voronoi, homofilia socioeconômica, decaimento, rede de antenas
-│       └── advanced.py       # scale-free, assortatividade/k-core, small-world, robustez
+│       ├── topology.py       # força, backbone, macro-regiões, s-core, balanço
+│       ├── spatial.py        # Voronoi, corredores, gravidade, homofilia, insularidade
+│       └── advanced.py       # robustez ponderada, rich-club, individual vs regional
 ├── config/                   # default.yaml + um yaml por cidade
-├── notebooks/                # notebooks exploratórios originais (referência)
+├── notebooks/                # camada narrativa fina sobre src/ (mesmos números do pipeline)
 ├── dados/                    # parquets de entrada/cache (residencias.csv não versionado)
 ├── output/                   # gerado em runtime (não versionado)
 ├── main.py                   # entrypoint CLI
@@ -108,37 +124,39 @@ pip install -r requirements.txt
 Dependências principais: `networkx`, `pandas`, `numpy`, `scipy`, `geopandas`, `shapely`,
 `contextily` (baixa o mapa de fundo — exige internet), `seaborn`, `matplotlib`, `pyarrow`, `pyyaml`.
 
-## Notebooks de referência (`notebooks/`)
+## Notebooks (`notebooks/`)
 
-Os notebooks exploratórios originais documentam, célula a célula, a mesma análise que o pipeline
-automatiza. Eles importam a cidade de `config.py` (`from config import CITY_NAME`).
+São uma **camada narrativa fina sobre `src/`**: chamam exatamente os mesmos módulos do pipeline via
+`InlineExporter`, então os números do notebook e os de `output/<cidade>/summary/report.md` nunca
+divergem. Basta trocar a variável `CIDADE` na célula de preparação.
 
 - `1-eda.ipynb` — EDA da base e construção das tabelas por antena.
-- `2-rede-complexa.ipynb` — topologia: grau, CCDF, componentes, clustering, centralidades, comunidades.
-- `3-analise-espacial.ipynb` — Voronoi, comunidades no mapa, decaimento, homofilia socioeconômica, rede de antenas.
-- `4-analises-avancadas.ipynb` — lei de potência, assortatividade/k-core, small-world, robustez.
+- `2-rede-antenas.ipynb` — a rede de regiões: nós, fluxos, força, backbone, macro-regiões, s-core.
+- `3-analise-espacial.ipynb` — Voronoi, corredores, modelo de gravidade, resíduos, homofilia.
+- `4-analises-avancadas.ipynb` — robustez ponderada, rich-club e o efeito da agregação.
 
 ## Análises incluídas
 
-**Topologia** — grafo não-direcionado ponderado, densidade, distribuição de grau e CCDF,
-componentes e componente gigante, clustering, centralidades (grau, força, intermediação, autovetor)
-e comunidades (Louvain + modularidade).
+**Estrutura da rede de regiões** — distribuição de força, desigualdade de volume (Lorenz/Gini),
+**backbone por filtro de disparidade** (Serrano et al.), **macro-regiões funcionais** (Louvain
+ponderado), **s-core** (núcleo-periferia por força), reciprocidade e balanço emissor/receptor.
 
-**Espacial e socioeconômica** — diagrama de Voronoi por quintil, **homofilia socioeconômica**
-(observado vs. modelo nulo + matriz de mistura), **decaimento da intensidade com a distância**,
-**rede agregada de fluxo entre antenas**, mapa de hubs, visualização da rede sobre o mapa e
-concentração espacial das comunidades. Análises socioeconômicas: **grau por quintil** (desigualdade
-de conectividade) e **quintil dos hubs** (os mais conectados são de qual estrato?).
+**Espacial e socioeconômica** — Voronoi por quintil, mapas temáticos de insularidade, balanço
+líquido, chamadas por morador e macro-regiões; mapa de todos os corredores e do backbone;
+**modelo de gravidade** (`F ≈ (n_i n_j)^a / d^b`) com mapa dos **resíduos**; **homofilia por quintil
+ponderada por volume**, matriz de mistura e **índice de auto-preferência por estrato**.
 
-**Avançadas** — **lei de potência** (MLE/Clauset), **assortatividade** de grau e **k-core**,
-**small-world** (σ vs. grafo aleatório), **robustez** (ataque dirigido vs. falha aleatória) e
-**rich-club** (os hubs formam um clube?).
+**Avançadas** — **robustez por eficiência ponderada** (a rede densa não fragmenta; ela degrada),
+**rich-club ponderado** por força e a comparação **individual vs. regional**, que separa preferência
+social de proximidade territorial (falácia ecológica).
 
-Todas as análises têm **guardas de robustez**: em cidades pequenas (poucas antenas, grau baixo) as
-análises que não fazem sentido são puladas com aviso, sem quebrar a execução.
+Todas as análises têm **guardas de robustez**: em cidades pequenas as que não fazem sentido são
+puladas com aviso, sem quebrar a execução.
 
 ## Próximos passos sugeridos
 
-- Comparar cidades (Campinas × Lavras × outras) usando os relatórios por cidade.
+- Comparar cidades usando os relatórios por cidade (as métricas agora são comparáveis entre redes de
+  tamanhos diferentes, por serem baseadas em peso e não em contagem de nós).
+- Cruzar as macro-regiões funcionais com as divisões administrativas oficiais.
+- Confirmar a abrangência geográfica dos dados (ver o caveat da RMC em [`CLAUDE.md`](CLAUDE.md#8-notas-técnicas-reprodutibilidade)).
 - Incorporar métricas temporais, caso exista base com timestamps das chamadas.
-- Aprofundar a relação entre homofilia socioeconômica e segregação espacial.
