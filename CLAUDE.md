@@ -53,7 +53,7 @@ O pipeline é a fonte da verdade; os notebooks são uma camada narrativa fina so
 ```
 src/antenna.py            constrói a rede de regiões (nós, fluxos, backbone, gravidade, s-core)
 src/graph_builder.py      utilitários de agregação de pares de usuários
-src/exporter.py           figuras, métricas (JSON), relatório (MD) e InlineExporter (notebooks)
+src/exporter.py           figuras, métricas (JSON) e relatório (MD)
 src/pipeline/eda.py       gera os parquets por antena a partir do residencias.csv
 src/pipeline/topology.py  força, backbone, macro-regiões, s-core, balanço
 src/pipeline/spatial.py   Voronoi, corredores, gravidade, homofilia, insularidade
@@ -83,7 +83,7 @@ notebooks/                1-eda, 2-rede-antenas, 3-analise-espacial, 4-analises-
   máximo 0,55).
 - Volume desigual entre regiões: **Gini 0,37**.
 - **Backbone (filtro de disparidade, α=0,05): 656 fluxos (11% do total) carregam 62% de todas as
-  chamadas** e cobrem as 145 regiões (um corte pelo peso bruto do mesmo tamanho alcançaria 139).
+  chamadas** e cobrem as 145 regiões (um corte pelo peso bruto do mesmo tamanho alcançaria 141).
 - **5 macro-regiões funcionais** (Louvain ponderado, modularidade 0,40, a maior com 54 antenas).
 - **Reciprocidade 0,86** — quem recebe, devolve.
 - Núcleo s-core final: **42 regiões**.

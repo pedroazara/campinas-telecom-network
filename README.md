@@ -92,7 +92,7 @@ Se os parquets por antena ainda não existirem, o módulo de EDA os gera a parti
 ├── src/
 │   ├── antenna.py            # rede de regiões: nós, fluxos, backbone, gravidade, s-core
 │   ├── graph_builder.py      # agregação de pares de usuários (insumo da rede de regiões)
-│   ├── exporter.py           # figuras/métricas/relatório + InlineExporter para notebooks
+│   ├── exporter.py           # salva figuras, métricas (JSON) e relatório (Markdown)
 │   ├── utils.py              # load_config, logging, criação de pastas
 │   └── pipeline/
 │       ├── eda.py            # gera os parquets por antena (a partir do residencias.csv)
@@ -126,14 +126,20 @@ Dependências principais: `networkx`, `pandas`, `numpy`, `scipy`, `geopandas`, `
 
 ## Notebooks (`notebooks/`)
 
-São uma **camada narrativa fina sobre `src/`**: chamam exatamente os mesmos módulos do pipeline via
-`InlineExporter`, então os números do notebook e os de `output/<cidade>/summary/report.md` nunca
-divergem. Basta trocar a variável `CIDADE` na célula de preparação.
+São a **versão didática** da análise: constroem a rede passo a passo usando as primitivas de
+`src/antenna.py` (os algoritmos vêm do mesmo código do pipeline, sem reimplementação), com texto
+explicando cada conceito antes e interpretando os números depois. Basta trocar a variável `CIDADE`
+na célula de preparação.
 
-- `1-eda.ipynb` — EDA da base e construção das tabelas por antena.
-- `2-rede-antenas.ipynb` — a rede de regiões: nós, fluxos, força, backbone, macro-regiões, s-core.
-- `3-analise-espacial.ipynb` — Voronoi, corredores, modelo de gravidade, resíduos, homofilia.
-- `4-analises-avancadas.ipynb` — robustez ponderada, rich-club e o efeito da agregação.
+- `1-eda.ipynb` — EDA da base bruta, construção das tabelas por antena e caracterização da nova
+  unidade de análise (tamanho das regiões, quintis, comunicação interna vs. externa).
+- `2-rede-antenas.ipynb` — a rede de regiões passo a passo, **a demonstração de por que lei de
+  potência, small-world e k-core perdem o sentido nessa escala**, e o que entra no lugar: força e
+  desigualdade, backbone por disparidade, macro-regiões, s-core, reciprocidade.
+- `3-analise-espacial.ipynb` — Voronoi e mapas temáticos, corredores, macro-regiões no mapa,
+  modelo de gravidade e resíduos, homofilia por quintil.
+- `4-analises-avancadas.ipynb` — robustez por eficiência ponderada, rich-club e a **falácia
+  ecológica**: por que a homofilia de 1,9× não sobrevive a um modelo nulo correto.
 
 ## Análises incluídas
 

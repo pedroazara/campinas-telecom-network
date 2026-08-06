@@ -84,6 +84,12 @@ def _plot_backbone(G: nx.Graph, B: nx.Graph, alpha: float, exporter, city_name: 
         naive_coverage.append(len({u for u, _, _ in keep} | {v for _, v, _ in keep}))
     backbone_coverage = len([n for n, d in B.degree() if d > 0])
 
+    # comparação justa: corte ingênuo com exatamente o mesmo número de fluxos do backbone
+    naive_same_size = edges[:b_edges]
+    naive_coverage_same_size = len(
+        {u for u, _, _ in naive_same_size} | {v for _, v, _ in naive_same_size}
+    )
+
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     axes[0].plot(np.arange(1, n_edges + 1) / n_edges, np.cumsum(weights) / total_weight,
                  "-", color="gray", lw=2, label="corte pelos maiores fluxos")
@@ -113,7 +119,7 @@ def _plot_backbone(G: nx.Graph, B: nx.Graph, alpha: float, exporter, city_name: 
         "backbone_weight_fraction": float(weight_frac),
         "backbone_density": float(nx.density(B)),
         "backbone_regions_covered": int(backbone_coverage),
-        "naive_cut_regions_covered": int(np.interp(edge_frac, fracs, naive_coverage)),
+        "naive_cut_regions_covered": int(naive_coverage_same_size),
     }
 
 
