@@ -63,6 +63,25 @@ output/campinas/
             report.md      (relatório com tabela de métricas + tradução "para o prefeito")
 ```
 
+### Escolher quais cidades analisar
+
+A resolução espacial de uma cidade é o número de antenas dela — com poucas antenas, a rede de
+regiões fica pequena demais para as análises. Para listar as cidades acima de um limiar:
+
+```bash
+python scripts/cidades_por_antenas.py 100
+```
+
+O script varre o `residencias.csv` em blocos, conta as geometrias residenciais distintas de cada
+cidade e imprime as que atingem o limiar, já com o **slug** que `config/<cidade>.yaml` espera.
+A contagem fica cacheada em `output/antenas_por_cidade.csv`, então só a primeira execução lê o
+arquivo inteiro (~3 min). Use `--csv <caminho>` para salvar a seleção, `--recomputar` para refazer a
+contagem e `--max-linhas N` para um teste rápido.
+
+O `residencias.csv` cobre **299 cidades** e 8.530 antenas no total, das quais **18 têm 100 ou mais
+antenas** — São Paulo lidera com 1.267 e Campinas tem 145. Cidades como Cabo Frio (13) e Lavras (7)
+são pequenas demais para a maior parte das métricas.
+
 ### Adicionar uma nova cidade
 
 Basta criar `config/<cidade>.yaml` apontando para os dados — **sem alterar código**:
@@ -99,6 +118,8 @@ Se os parquets por antena ainda não existirem, o módulo de EDA os gera a parti
 │       ├── topology.py       # força, backbone, macro-regiões, s-core, balanço
 │       ├── spatial.py        # Voronoi, corredores, gravidade, homofilia, insularidade
 │       └── advanced.py       # robustez ponderada, rich-club, individual vs regional
+├── scripts/
+│   └── cidades_por_antenas.py  # seleciona cidades pelo nº de antenas
 ├── config/                   # default.yaml + um yaml por cidade
 ├── notebooks/                # camada narrativa fina sobre src/ (mesmos números do pipeline)
 ├── dados/                    # parquets de entrada/cache (residencias.csv não versionado)
