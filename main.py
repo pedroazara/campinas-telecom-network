@@ -85,7 +85,8 @@ def run_city(city: str, args: argparse.Namespace, log) -> None:
 
     nodes = net.nodes
     if "topology" in requested:
-        result = topology.run(net, config, exporter, communities=communities)
+        result = topology.run(net, config, exporter, communities=communities,
+                              edges_antenna=edges_antenna)
         nodes = result.get("nodes", nodes)
     if "spatial" in requested:
         spatial.run(net, config, exporter, communities=communities, nodes=nodes)

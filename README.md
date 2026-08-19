@@ -50,10 +50,11 @@ Argumentos:
 ```
 output/campinas/
 ├── data/      antenna_nodes.csv, antenna_flows.csv, backbone_flows.csv,
+│              contact_matrix_K.csv, contact_matrix_J.csv,
 │              gravity_top_residuals.csv, edges_antenna.parquet, antennas.parquet
 ├── figures/
-│   ├── topology/   strength_distribution.png, backbone.png, score.png,
-│   │               balance_insularity.png
+│   ├── topology/   strength_distribution.png, backbone.png, contact_matrix.png,
+│   │               score.png, balance_insularity.png
 │   ├── spatial/    voronoi_quintile.png, macro_regions_map.png, insularity_map.png,
 │   │               net_balance_map.png, calls_per_user_map.png, flows_all.png,
 │   │               flows_backbone.png, gravity_model.png, gravity_residuals.png,
@@ -163,6 +164,13 @@ na célula de preparação.
   ecológica**: por que a homofilia de 1,9× não sobrevive a um modelo nulo correto.
 
 ## Análises incluídas
+
+**Matriz de conexão entre antenas** — `K_lm` (contatos entre residentes de duas antenas) e
+`J_lm = K_lm/(u_l·u_m)` (fração dos pares possíveis que está conectada), conforme
+*Detecting Communities from Cell Phone Antennas*. Exportadas como matriz em
+`contact_matrix_K.csv` / `contact_matrix_J.csv` e como heatmap agrupado por macro-região.
+`J` pode ser usado como peso das arestas via `antenna.weight` — ele normaliza pelo tamanho das
+regiões, corrigindo o viés do volume bruto.
 
 **Estrutura da rede de regiões** — distribuição de força, desigualdade de volume (Lorenz/Gini),
 **backbone por filtro de disparidade** (Serrano et al.), **macro-regiões funcionais** (Louvain

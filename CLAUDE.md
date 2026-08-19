@@ -69,8 +69,21 @@ notebooks/                1-eda, 2-rede-antenas, 3-analise-espacial, 4-analises-
   `calls_duration_total`, `n_pairs` (pares de pessoas por trás do fluxo), `dist_km` (haversine) e
   `intensity` (`q_calls` normalizado pelo produto das populações).
 - Há também a versão **dirigida** (`net.D`), usada para reciprocidade e balanço emissor/receptor.
-- O **peso é `q_calls` bruto**. O antigo `log1p(q_calls) * log1p(duração)` fazia sentido entre
-  pessoas, não entre regiões.
+- O **peso é `q_calls` bruto** por padrão. O antigo `log1p(q_calls) * log1p(duração)` fazia sentido
+  entre pessoas, não entre regiões. Configurável em `antenna.weight` (`q_calls`, `J`, `n_pairs`).
+
+**Matriz de conexão entre antenas (`build_contact_matrix`)** — formulação do paper
+*Detecting Communities from Cell Phone Antennas*:
+
+    k_i  = Σ_l k_i(l)           contatos do indivíduo i, repartidos por antena
+    K_lm = Σ_{i∈V_l} k_i(m)     contatos entre residentes de l e residentes de m
+    J_lm = K_lm / (u_l · u_m)   intensidade normalizada da ligação
+
+**A unidade é o contato, não a chamada:** dois moradores que se telefonam 200 vezes contam como
+1 contato. Por isso J é uma **densidade** — a fração dos `u_l·u_m` pares possíveis que existe de
+fato — e vive em [0, 1]. Isso corrige o viés de tamanho do peso bruto, em que uma região grande
+sempre tem volume alto. A diagonal tem três convenções (`paper`, `density`, `zero`), porque a
+definição literal conta cada par interno duas vezes e o denominador correto ali é u_l(u_l−1)/2.
 
 ---
 
@@ -87,6 +100,12 @@ notebooks/                1-eda, 2-rede-antenas, 3-analise-espacial, 4-analises-
 - **5 macro-regiões funcionais** (Louvain ponderado, modularidade 0,40, a maior com 54 antenas).
 - **Reciprocidade 0,86** — quem recebe, devolve.
 - Núcleo s-core final: **42 regiões**.
+- **Matriz de conexão (K e J):** 23.016 contatos entre regiões e 8.493 internos; J mediano
+  7,7×10⁻⁵ e máximo 5,0×10⁻³ — nenhum par de regiões chega perto de esgotar os contatos possíveis.
+  **J e o volume bruto ordenam as ligações de forma bem diferente** (Spearman 0,43): as ligações
+  mais fortes por J envolvem regiões pequenas (mediana de 48 moradores na menor ponta, contra 190
+  quando se ordena por volume). Trocando o peso para J, o backbone cai de 656 para 427 fluxos com
+  só 33% de sobreposição, e as 5 macro-regiões mudam de composição (ARI 0,53).
 
 ### 4.2 Espaço e gravidade
 - Cada antena é uma **célula de Voronoi**; os mapas temáticos mostram quintil, insularidade, balanço

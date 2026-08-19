@@ -16,7 +16,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from networkx.algorithms.community import louvain_communities, modularity
 
-from ..antenna import s_core_levels
+from ..antenna import s_core_levels, build_contact_matrix
 
 logger = logging.getLogger("pipeline")
 
@@ -123,6 +123,43 @@ def _plot_backbone(G: nx.Graph, B: nx.Graph, alpha: float, exporter, city_name: 
     }
 
 
+
+def _plot_contact_matrix(cm, ordem, exporter, city_name: str) -> dict:
+    """Heatmap da matriz J, com as antenas agrupadas pelas macro-regiões.
+
+    J varre várias ordens de grandeza, então a escala de cor é logarítmica. Ordenar as
+    antenas pela macro-região faz a estrutura de blocos aparecer: se a divisão detectada nos
+    fluxos for real, os blocos na diagonal ficam visivelmente mais densos que o resto.
+    """
+    from matplotlib.colors import LogNorm
+
+    J = cm.J.reindex(index=ordem, columns=ordem).to_numpy(dtype=float)
+    fora = ~np.eye(len(J), dtype=bool)
+    positivos = J[fora & (J > 0)]
+    if positivos.size == 0:
+        return {}
+
+    fig, ax = plt.subplots(figsize=(9, 7.5))
+    imagem = ax.imshow(
+        np.where(J > 0, J, np.nan), cmap="magma_r",
+        norm=LogNorm(vmin=positivos.min(), vmax=positivos.max()),
+        interpolation="nearest",
+    )
+    fig.colorbar(imagem, ax=ax, label="J$_{lm}$ = contatos / pares possíveis (escala log)")
+    ax.set_xlabel("antena m (agrupadas por macro-região)")
+    ax.set_ylabel("antena l")
+    ax.set_title(f"Matriz de conexão entre antenas — {city_name}")
+    exporter.save_figure(fig, "contact_matrix", "topology")
+
+    return {
+        "contact_pairs_between_regions": int(cm.K.to_numpy()[fora].sum() // 2),
+        "contact_pairs_internal": int(np.diagonal(cm.K.to_numpy()).sum() // 2),
+        "J_median": float(np.median(positivos)),
+        "J_max": float(positivos.max()),
+        "J_connected_region_pairs": int((J[fora] > 0).sum() // 2),
+    }
+
+
 def _plot_score(G: nx.Graph, exporter, city_name: str) -> tuple[pd.Series, dict]:
     """Decomposição s-core: o núcleo de regiões que concentra o tráfego."""
     levels = s_core_levels(G)
@@ -159,7 +196,7 @@ def _plot_balance(nodes: pd.DataFrame, reciprocity: float, exporter, city_name: 
     exporter.save_figure(fig, "balance_insularity", "topology")
 
 
-def run(net, config: dict, exporter, communities=None) -> dict:
+def run(net, config: dict, exporter, communities=None, edges_antenna=None) -> dict:
     """Calcula e exporta a estrutura da rede de regiões."""
     logger.info("[topology] força, backbone, macro-regiões, s-core, balanço")
     city_name = exporter.city_name
@@ -200,6 +237,16 @@ def run(net, config: dict, exporter, communities=None) -> dict:
         modularity=float(Q),
         largest_macro_region=int(sizes[0]),
     )
+
+    # -------- matriz de conexão entre antenas (K e J) --------
+    # Formulação do paper: K_lm = contatos entre residentes de l e m; J_lm = K_lm/(u_l u_m).
+    # A unidade é o contato (pessoas distintas conectadas), não o volume de chamadas.
+    cm = build_contact_matrix(edges_antenna, nodes) if edges_antenna is not None else None
+    if cm is not None:
+        ordem = nodes.sort_values(["macro_region", "antenna_id"])["antenna_id"].to_numpy()
+        metrics.update(_plot_contact_matrix(cm, ordem, exporter, city_name))
+        exporter.save_data(cm.J.reindex(index=ordem, columns=ordem).round(8), "contact_matrix_J.csv")
+        exporter.save_data(cm.K.reindex(index=ordem, columns=ordem), "contact_matrix_K.csv")
 
     # -------- núcleo e periferia --------
     levels, score_metrics = _plot_score(G, exporter, city_name)

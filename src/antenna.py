@@ -154,6 +154,9 @@ def build_antenna_flows(edges_antenna: pd.DataFrame, nodes: pd.DataFrame) -> pd.
     users = nodes.set_index("antenna_id")["n_users"]
     size_product = users.reindex(flows["a"]).to_numpy() * users.reindex(flows["b"]).to_numpy()
     flows["size_product"] = size_product
+    # J do paper: fração dos u_a·u_b pares possíveis que está de fato conectada (densidade em [0,1]).
+    flows["J"] = np.where(size_product > 0, flows["n_pairs"] / size_product, np.nan)
+    # intensity usa CHAMADAS no lugar de contatos — mede volume por par possível, não densidade.
     flows["intensity"] = np.where(size_product > 0, flows["q_calls"] / size_product, np.nan)
     flows["weight"] = flows["q_calls"].astype(float)
     flows["avg_duration_per_call"] = flows["calls_duration_total"] / flows["q_calls"].replace(0, np.nan)
@@ -185,7 +188,7 @@ def build_antenna_graph(flows: pd.DataFrame, nodes: pd.DataFrame) -> nx.Graph:
     ]
     G = nx.from_pandas_edgelist(
         flows, "a", "b",
-        edge_attr=["weight", "q_calls", "n_pairs", "dist_km", "intensity", "calls_duration_total"],
+        edge_attr=["weight", "q_calls", "n_pairs", "dist_km", "J", "intensity", "calls_duration_total"],
     )
     G.add_nodes_from(nodes["antenna_id"])  # antenas isoladas não podem sumir
     present = [c for c in attrs if c in nodes.columns]
@@ -354,17 +357,123 @@ class AntennaNetwork:
 
 def build(edges_antenna: pd.DataFrame, antennas: pd.DataFrame, config: dict | None = None) -> AntennaNetwork:
     """Constrói a rede de antenas completa a partir das tabelas por usuário."""
-    alpha = (config or {}).get("antenna", {}).get("backbone_alpha", 0.05)
+    cfg = (config or {}).get("antenna", {})
+    alpha = cfg.get("backbone_alpha", 0.05)
+    coluna_peso = cfg.get("weight", "q_calls")
 
     nodes = build_antenna_nodes(edges_antenna, antennas)
     flows = build_antenna_flows(edges_antenna, nodes)
+
+    if coluna_peso not in flows.columns:
+        raise ValueError(
+            f"antenna.weight = {coluna_peso!r} não existe nos fluxos "
+            f"(disponíveis: {', '.join(c for c in ['q_calls', 'J', 'n_pairs', 'intensity'] if c in flows.columns)})"
+        )
+    flows["weight"] = flows[coluna_peso].astype(float)
     directed = build_directed_flows(edges_antenna, nodes)
     G = build_antenna_graph(flows, nodes)
     D = build_antenna_digraph(directed, nodes)
     backbone = disparity_filter(G, alpha=alpha)
 
     logger.info(
-        "[antena] %d regiões | %d fluxos (densidade %.3f) | backbone %d fluxos (α=%.2f)",
-        len(nodes), G.number_of_edges(), nx.density(G), backbone.number_of_edges(), alpha,
+        "[antena] %d regiões | %d fluxos (densidade %.3f) | peso=%s | backbone %d fluxos (α=%.2f)",
+        len(nodes), G.number_of_edges(), nx.density(G), coluna_peso,
+        backbone.number_of_edges(), alpha,
     )
     return AntennaNetwork(nodes, flows, directed, G, D, backbone, alpha)
+
+
+# --------------------------------------------------------------------------- matriz de contatos
+@dataclass
+class ContactMatrix:
+    """Matriz de conexão entre antenas, na formulação do paper.
+
+    - ``K``: contatos entre residentes de cada par de antenas (inteiros).
+    - ``J``: intensidade normalizada — a fração dos pares possíveis que está conectada.
+    - ``users``: u_l, o número de moradores de cada antena (o denominador).
+    """
+
+    K: pd.DataFrame
+    J: pd.DataFrame
+    users: pd.Series
+    diagonal: str
+
+    def flows(self) -> pd.DataFrame:
+        """Versão longa da matriz, só o triângulo superior e sem os pares desconectados."""
+        K = self.K.to_numpy()
+        J = self.J.to_numpy()
+        idx = self.K.index.to_numpy()
+        li, mi = np.triu_indices(len(idx), k=1)
+        tabela = pd.DataFrame({
+            "a": idx[li], "b": idx[mi],
+            "K": K[li, mi], "J": J[li, mi],
+            "u_a": self.users.to_numpy()[li], "u_b": self.users.to_numpy()[mi],
+        })
+        return tabela[tabela["K"] > 0].sort_values("J", ascending=False).reset_index(drop=True)
+
+
+def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
+                         diagonal: str = "paper") -> ContactMatrix:
+    """Matriz de conexão entre antenas — K_lm e J_lm.
+
+    Segue a formulação de *Detecting Communities from Cell Phone Antennas*:
+
+        k_i    = Σ_l k_i(l)          contatos do indivíduo i, repartidos por antena
+        K_lm   = Σ_{i∈V_l} k_i(m)    contatos entre residentes de l e residentes de m
+        J_lm   = K_lm / (u_l · u_m)  intensidade normalizada da ligação
+
+    **A unidade é o contato, não a chamada.** K conta *pessoas distintas* conectadas: se dois
+    moradores se telefonam 200 vezes, isso é 1 contato, não 200. Por isso J é uma
+    **densidade** — a fração dos u_l · u_m pares possíveis que de fato existe — e vive em
+    [0, 1], ao contrário do volume bruto de chamadas.
+
+    Como cada par conectado (i∈V_l, j∈V_m) entra uma vez em k_i(m) e uma vez em k_j(l),
+    somamos 1 nas duas posições (l,m) e (m,l). Para l ≠ m isso dá K simétrica com a contagem
+    de pares; para l = m dá o dobro do número de pares internos, que é exatamente o que a
+    definição do paper produz (cada par interno é visto pelos seus dois extremos).
+
+    ``diagonal``:
+      - ``"paper"``  — literal: K_ll = 2 × pares internos, J_ll = K_ll / u_l².
+      - ``"density"`` — K_ll = pares internos e o denominador vira u_l(u_l−1)/2, de modo que
+        J_ll é a densidade do grafo interno da região, comparável a J_lm.
+      - ``"zero"``   — zera a diagonal (útil quando só interessam as ligações entre regiões).
+    """
+    if diagonal not in {"paper", "density", "zero"}:
+        raise ValueError(f"diagonal deve ser 'paper', 'density' ou 'zero' (recebido: {diagonal!r})")
+
+    antenas = nodes["antenna_id"].to_numpy()
+    posicao = {a: i for i, a in enumerate(antenas)}
+    n = len(antenas)
+
+    user_antenna = build_user_antenna_map(edges_antenna)
+    pares = build_edges_graph(edges_antenna)  # um registro por par de usuários conectado
+
+    la = pares["source"].map(user_antenna).map(posicao)
+    lb = pares["target"].map(user_antenna).map(posicao)
+    ok = la.notna() & lb.notna()
+    la = la[ok].to_numpy(dtype=int)
+    lb = lb[ok].to_numpy(dtype=int)
+
+    K = np.zeros((n, n), dtype=np.int64)
+    np.add.at(K, (la, lb), 1)
+    np.add.at(K, (lb, la), 1)
+
+    u = nodes.set_index("antenna_id")["n_users"].reindex(antenas).to_numpy(dtype=float)
+    denominador = np.outer(u, u)
+
+    if diagonal == "density":
+        np.fill_diagonal(K, np.diagonal(K) // 2)
+        np.fill_diagonal(denominador, u * (u - 1) / 2)
+    elif diagonal == "zero":
+        np.fill_diagonal(K, 0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        J = np.where(denominador > 0, K / denominador, np.nan)
+
+    rotulos = pd.Index(antenas, name="antenna_id")
+    return ContactMatrix(
+        K=pd.DataFrame(K, index=rotulos, columns=rotulos),
+        J=pd.DataFrame(J, index=rotulos, columns=rotulos),
+        users=pd.Series(u, index=rotulos, name="u"),
+        diagonal=diagonal,
+    )

@@ -8,6 +8,12 @@ antenna:
   backbone_alpha: 0.05
   # Coluna de quintil usada nas análises socioeconômicas.
   quintile_column: "residence_quintile_state"
+  # Peso das arestas da rede de regiões:
+  #   q_calls — volume bruto de chamadas (padrão)
+  #   J       — intensidade normalizada do paper: contatos / (u_l · u_m), em [0,1].
+  #             Corrige o viés de tamanho: uma região grande sempre tem volume alto.
+  #   n_pairs — contatos brutos, sem normalizar
+  weight: "q_calls"
 
 analyses:
   eda: true

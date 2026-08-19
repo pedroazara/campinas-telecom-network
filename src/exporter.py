@@ -74,7 +74,9 @@ class Exporter:
             return None
         path = self.dirs["data"] / name
         if str(name).endswith(".csv"):
-            df.to_csv(path, index=False)
+            # matrizes (índice == colunas) precisam do índice para serem relidas
+            matriz = df.index.equals(df.columns) if hasattr(df, "columns") else False
+            df.to_csv(path, index=matriz)
         else:
             df.to_parquet(path, index=False)
         logger.info("dados salvos: %s", path.relative_to(self.base.parent))
