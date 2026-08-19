@@ -413,7 +413,8 @@ class ContactMatrix:
 
 
 def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
-                         diagonal: str = "paper") -> ContactMatrix:
+                         diagonal: str = "paper",
+                         users: pd.Series | None = None) -> ContactMatrix:
     """Matriz de conexão entre antenas — K_lm e J_lm.
 
     Segue a formulação de *Detecting Communities from Cell Phone Antennas*:
@@ -437,6 +438,10 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
       - ``"density"`` — K_ll = pares internos e o denominador vira u_l(u_l−1)/2, de modo que
         J_ll é a densidade do grafo interno da região, comparável a J_lm.
       - ``"zero"``   — zera a diagonal (útil quando só interessam as ligações entre regiões).
+
+    ``users`` permite fornecer outro u_l. O padrão é ``nodes["n_users"]``, isto é, os usuários
+    que **aparecem na base de chamadas** — não a população residente cadastrada, que é maior
+    (em Campinas, 25.176 contra 33.455). Ver a discussão em ``MATRIZ_CONEXAO.md``.
     """
     if diagonal not in {"paper", "density", "zero"}:
         raise ValueError(f"diagonal deve ser 'paper', 'density' ou 'zero' (recebido: {diagonal!r})")
@@ -448,6 +453,10 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
     user_antenna = build_user_antenna_map(edges_antenna)
     pares = build_edges_graph(edges_antenna)  # um registro por par de usuários conectado
 
+    # k_i conta os contatos de i, e uma pessoa não é contato de si mesma: as autochamadas
+    # (mesmo ID nos dois extremos) são artefato do dado e ficam de fora da contagem.
+    pares = pares[pares["source"] != pares["target"]]
+
     la = pares["source"].map(user_antenna).map(posicao)
     lb = pares["target"].map(user_antenna).map(posicao)
     ok = la.notna() & lb.notna()
@@ -458,7 +467,9 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
     np.add.at(K, (la, lb), 1)
     np.add.at(K, (lb, la), 1)
 
-    u = nodes.set_index("antenna_id")["n_users"].reindex(antenas).to_numpy(dtype=float)
+    if users is None:
+        users = nodes.set_index("antenna_id")["n_users"]
+    u = pd.Series(users).reindex(antenas).to_numpy(dtype=float)
     denominador = np.outer(u, u)
 
     if diagonal == "density":

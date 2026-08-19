@@ -171,6 +171,8 @@ na célula de preparação.
 `contact_matrix_K.csv` / `contact_matrix_J.csv` e como heatmap agrupado por macro-região.
 `J` pode ser usado como peso das arestas via `antenna.weight` — ele normaliza pelo tamanho das
 regiões, corrigindo o viés do volume bruto.
+Ver [`MATRIZ_CONEXAO.md`](MATRIZ_CONEXAO.md): as equações, a correspondência com o código, a
+verificação contra uma implementação literal do artigo e as decisões onde ele é omisso.
 
 **Estrutura da rede de regiões** — distribuição de força, desigualdade de volume (Lorenz/Gini),
 **backbone por filtro de disparidade** (Serrano et al.), **macro-regiões funcionais** (Louvain
