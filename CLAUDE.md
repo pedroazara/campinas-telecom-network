@@ -35,6 +35,7 @@ social de Campinas, e o que isso sugere para políticas públicas?*
 | `residencias.csv` | Residência de cada usuário: `ID`, `residence_geometry` (ponto em WKB), `residence_city`, `residence_quintile_state/nation`. **~1 GB, não versionado.** |
 | `<cidade>_edges_antenna.parquet` | Arestas usuário→usuário (só quem tem residência conhecida) + id da antena de cada extremo. Gerado pelo módulo de EDA. |
 | `<cidade>_antennas.parquet` | Antenas residenciais distintas, com cidade e quintis. |
+| `limites-cidade/<cidade>_fua.geojson` | Limite territorial da cidade (GHS-FUA), ~8 KB, versionado. Extraído do geopackage global do GHSL por `scripts/extrair_limite.py`. |
 
 **Números da base de Campinas:** 25.176 usuários com residência conhecida, distribuídos em
 **145 antenas** (mediana de **148 moradores por antena**, mín. 11, máx. 587). Quintis `q1`–`q5`
@@ -52,6 +53,7 @@ O pipeline é a fonte da verdade; os notebooks são uma camada narrativa fina so
 
 ```
 src/antenna.py            constrói a rede de regiões (nós, fluxos, backbone, gravidade, s-core)
+src/boundary.py           carrega o limite territorial (GHS-FUA) que recorta o Voronoi
 src/graph_builder.py      utilitários de agregação de pares de usuários
 src/exporter.py           figuras, métricas (JSON) e relatório (MD)
 src/pipeline/eda.py       gera os parquets por antena a partir do residencias.csv
@@ -59,6 +61,7 @@ src/pipeline/topology.py  força, backbone, macro-regiões, s-core, balanço
 src/pipeline/spatial.py   Voronoi, corredores, gravidade, homofilia, insularidade
 src/pipeline/advanced.py  robustez ponderada, rich-club, individual vs regional
 main.py                   CLI: python main.py --city campinas --analyses all
+painel.py                 menu no terminal: roda pipeline, scripts e notebooks sem digitar
 notebooks/                1-eda, 2-rede-antenas, 3-analise-espacial, 4-analises-avancadas
 ```
 
@@ -98,6 +101,15 @@ definição literal conta cada par interno duas vezes e o denominador correto al
 - **Backbone (filtro de disparidade, α=0,05): 656 fluxos (11% do total) carregam 62% de todas as
   chamadas** e cobrem as 145 regiões (um corte pelo peso bruto do mesmo tamanho alcançaria 141).
 - **5 macro-regiões funcionais** (Louvain ponderado, modularidade 0,40, a maior com 54 antenas).
+  Exportáveis como polígonos por `scripts/exportar_macroregioes.py`. **As 5 saem com uma única parte
+  cada — contiguidade espacial perfeita**, e o Louvain só vê volume de chamadas. A união delas
+  reproduz a cidade sem buracos nem sobreposição.
+- **Insularidade da macro-região: 61% a 82%** — muito acima dos 36% por antena. Agrupadas em
+  macro-regiões, as áreas se bastam: a macro-região do noroeste (Americana/Santa Bárbara, 21 antenas)
+  fecha **82%** do seu volume dentro de si.
+- **Atenção ao peso:** a contiguidade perfeita vale para `q_calls`. Com `J` (normalizado por
+  população), **3 das 5 macro-regiões se partem** em 2–3 pedaços. A regionalização contígua é uma
+  propriedade do volume, não da densidade de laços — vale dizer isso se perguntarem.
 - **Reciprocidade 0,86** — quem recebe, devolve.
 - Núcleo s-core final: **42 regiões**.
 - **Matriz de conexão (K e J):** 23.016 contatos entre regiões e 8.493 internos; J mediano
@@ -108,8 +120,12 @@ definição literal conta cada par interno duas vezes e o denominador correto al
   só 33% de sobreposição, e as 5 macro-regiões mudam de composição (ARI 0,53).
 
 ### 4.2 Espaço e gravidade
-- Cada antena é uma **célula de Voronoi**; os mapas temáticos mostram quintil, insularidade, balanço
-  emissor/receptor, chamadas por morador e macro-regiões.
+- Cada antena é uma **célula de Voronoi recortada pelo limite real da cidade** (GHS-FUA, seção 8);
+  os mapas temáticos mostram quintil, insularidade, balanço emissor/receptor, chamadas por morador,
+  densidade e macro-regiões. O contorno da cidade entra em todos os mapas, inclusive nos de fluxo.
+- Com o recorte, a célula passa a ter **área**: mediana **7,7 km²** (mín. 0,15, máx. 67,4) dentro de
+  uma cidade de **1.564 km²** — 0,5% de diferença contra os 1.571 km² declarados pelo próprio GHS-FUA,
+  o que valida a geometria. A densidade mediana é de 23 usuários da amostra por km².
 - **As 5 macro-regiões saem espacialmente contíguas**, embora o Louvain não conheça geografia — a
   divisão funcional da cidade coincide com a territorial. *É a figura de maior impacto visual.*
 - **Modelo de gravidade:** `F_ij ≈ C · (n_i n_j)^0,56 / d_ij^1,09`, R² = 0,27. O expoente de
@@ -172,6 +188,7 @@ disparidade, insularidade, balanço emissor/receptor, reciprocidade e regionaliz
 | 36% das chamadas não saem da região | **A vida acontece no bairro.** Argumento direto para descentralizar serviços, saúde e equipamentos públicos. |
 | Backbone: 11% dos fluxos carregam 62% do volume | **Onde investir.** A cidade tem um esqueleto de comunicação bem definido — prioridade natural para infraestrutura e redundância de telecom. |
 | 5 macro-regiões funcionais e contíguas | **A cidade real vs. a cidade administrativa.** Os fluxos revelam agrupamentos de bairros que funcionam como unidade; comparar com as divisões oficiais mostra onde o desenho administrativo não acompanha a vida cotidiana. |
+| Os 145 pontos de "Campinas" caem todos na área urbana funcional | **A cidade não termina na divisa.** Quem a base chama de Campinas mora também em Sumaré, Hortolândia, Valinhos, Paulínia — e se comunica como uma cidade só. O município é a unidade de governo; a **cidade funcional** é a unidade do problema. Política de mobilidade, saúde e telecom desenhada só dentro da divisa administrativa erra o alvo por construção. |
 | Gravidade: fluxo cai com d^1,09 | **A distância ainda governa a interação** — e os resíduos apontam laços entre bairros distantes que indicam dependências de trabalho ou origem em comum. |
 | Robustez: degradação gradual, sem colapso | **Resiliência.** A rede não se parte ao perder uma área, mas perde capacidade de forma desigual: as regiões de maior volume merecem redundância prioritária. |
 
@@ -195,14 +212,38 @@ disparidade, insularidade, balanço emissor/receptor, reciprocidade e regionaliz
   use `--no-basemap` para rodar offline.
 - **Execução:** `python main.py --city campinas --analyses all` (~30 s). Saída em
   `output/campinas/` (figuras, `metrics.json`, `report.md`).
+- **Atalho para tudo:** `python painel.py` abre um menu que chama o pipeline, os scripts e os
+  notebooks, e mostra o comando equivalente antes de cada execução.
+- **Estabilidade das macro-regiões:** `python scripts/estabilidade_macroregioes.py campinas`
+  responde "a semente foi escolhida a dedo?" (ARI ≥ 0,94 em 30 sementes, sempre 5 comunidades) e
+  "Q=0,40 é alto?" (o nulo desta densidade dá 0,26; o observado está a ~30 desvios-padrão).
+- **Macro-regiões como polígonos:** `python scripts/exportar_macroregioes.py campinas`
+  (`--formato gpkg`, `--peso J`, `--seed N`). Saída em `output/<cidade>/data/macroregioes.geojson`.
+- **Limite da cidade:** `python scripts/extrair_limite.py campinas` regenera o GeoJSON a partir do
+  geopackage global do GHS-FUA (~10 MB, não versionado — o GeoJSON de 8 KB é). Sem o limite o
+  pipeline não quebra: cai no recorte retangular antigo e avisa no log.
 - **Determinismo:** Louvain, permutações e amostragens usam `seed=42`.
-- **Caveat importante (verificar antes de apresentar):** as 145 antenas estão todas marcadas com
+- **A abrangência geográfica: resolvida.** As 145 antenas estão todas marcadas com
   `residence_city == "Campinas"`, mas se espalham por **48 × 39 km**, com 46 delas a mais de 15 km do
   centro — o mapa mostra pontos em Americana, Santa Bárbara d'Oeste, Sumaré, Hortolândia, Paulínia,
-  Valinhos e Jaguariúna. Ou o campo `residence_city` designa a **região metropolitana**, ou as
-  geometrias são anonimizadas de forma grosseira. Isso não invalida nenhuma análise, mas muda o
-  enquadramento: provavelmente estamos falando da **RMC**, não do município. Vale confirmar com o
-  professor.
+  Valinhos e Jaguariúna. Isso levantou a suspeita de que ou o campo designava a região metropolitana,
+  ou as geometrias eram anonimizadas de forma grosseira.
+  **É a primeira hipótese.** Cruzando as antenas com o **GHS-FUA** (GHSL/OECD, release R2019A), as
+  **145 de 145 caem dentro da área urbana funcional de Campinas** — nenhuma cai em FUA vizinho, nenhuma
+  fica de fora. O `residence_city` designa a **região funcional**, não o município. Não há erro de
+  geocodificação a corrigir, e o enquadramento certo da apresentação é o da **cidade funcional**.
+- **O limite territorial (GHS-FUA).** Uma *Functional Urban Area* é o centro urbano **mais a sua zona
+  de commuting** — a área de influência da cidade no mercado de trabalho —, delineada sobre uma grade
+  de população de 1 km, sem depender de fronteiras administrativas. O eFUA de Campinas tem
+  **1.571 km², 2,51 M habitantes (2015) e aglutina 3 centros urbanos**. É exatamente a unidade que os
+  dados descrevem, então ele recorta as células de Voronoi e vira o contorno de todos os mapas — antes
+  o corte era um retângulo arbitrário (bbox + 5 km) que esticava as células de borda.
+  O serrilhado do contorno é a grade de 1 km da fonte, não um artefato do nosso processamento.
+  As outras 4 cidades do projeto também têm FUA (Lavras 129 km², Divinópolis 284, Fortaleza 1.557,
+  Cabo Frio 338), então o recorte é genérico: `config/default.yaml → spatial.boundary`, casando
+  `eFUA_name` com `city_name`.
+  Fonte: Schiavina M. et al., *GHSL-OECD Functional Urban Areas 2019*, EUR 30001 EN,
+  doi:10.2760/67415, JRC 118845 (PDF em `limites-cidade/`).
 - **Outros caveats:** o modelo nulo de homofilia é uma permutação de rótulos (não controla o espaço
   explicitamente); o R² da gravidade (0,27) é típico, mas indica que a maior parte da variação dos
   fluxos não é explicada por tamanho e distância.
@@ -221,3 +262,6 @@ disparidade, insularidade, balanço emissor/receptor, reciprocidade e regionaliz
 - **Eficiência ponderada:** média das inversas dos caminhos mínimos, usando 1/peso como custo.
 - **Quintil:** faixa socioeconômica da região (q1 = 20% mais pobres … q5 = 20% mais ricos).
 - **Falácia ecológica:** concluir sobre indivíduos a partir de dados agregados por região.
+- **FUA (Functional Urban Area):** o centro urbano mais a sua zona de commuting — a cidade definida
+  pela área de influência no mercado de trabalho, não pela divisa administrativa. É o limite que
+  recorta as células de Voronoi aqui.

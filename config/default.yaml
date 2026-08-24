@@ -33,6 +33,20 @@ spatial:
   download_basemap: true   # contextily — requer internet
   voronoi: true
 
+  # Limite territorial que recorta as células de Voronoi e vira o contorno dos mapas.
+  # A fonte é o GHS-FUA (GHSL/OECD R2019A): área urbana FUNCIONAL — o centro urbano mais a
+  # sua zona de commuting —, não o limite municipal. É a unidade que corresponde aos dados:
+  # as antenas de "Campinas" se espalham pela região metropolitana e todas caem neste polígono.
+  boundary:
+    enabled: true
+    # GeoJSON por cidade (versionado, ~8 KB). Gerado por scripts/extrair_limite.py.
+    geojson_path: "./limites-cidade/{city}_fua.geojson"
+    # Fallback: geopackage global do GHS-FUA (~10 MB, não versionado).
+    gpkg_path: "./limites-cidade/GHS_FUA_UCDB2015_GLOBE_R2019A_54009_1K_V1_0.gpkg"
+    fua_name: null      # null = usa city_name; ajuste se a grafia do GHS-FUA diferir
+    country: "BRA"      # código ISO3 (coluna Cntry_ISO)
+    buffer_km: 0.0      # folga na borda, em km, para células muito recortadas
+
 advanced:
   robustness_steps: 20        # pontos da curva de eficiência (cada um roda Dijkstra all-pairs)
   homophily_permutations: 200 # repetições do modelo nulo de homofilia

@@ -14,10 +14,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import geopandas as gpd
+from matplotlib.colors import LogNorm
 from shapely.geometry import Polygon, LineString, box
 from scipy.spatial import Voronoi
 
 from ..antenna import fit_gravity_model
+from ..boundary import load_boundary
 
 logger = logging.getLogger("pipeline")
 
@@ -82,33 +84,72 @@ def _voronoi_finite_polygons_2d(vor, radius):
     return new_regions, np.asarray(new_vertices)
 
 
-def _build_voronoi(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def _build_voronoi(gdf: gpd.GeoDataFrame, boundary: gpd.GeoSeries | None = None) -> gpd.GeoDataFrame:
+    """Células de Voronoi das antenas, recortadas pelo limite da cidade.
+
+    O diagrama de Voronoi é infinito nas bordas. Com ``boundary``, cada célula é cortada
+    pela área urbana funcional e passa a ser a fatia de território de fato atribuída à
+    antena; sem ele, o recorte cai num retângulo com 5 km de folga — o comportamento
+    anterior, que estica as células de borda até um limite arbitrário.
+    """
     coords = np.column_stack([gdf.geometry.x, gdf.geometry.y])
     vor = Voronoi(coords)
     radius = (coords.max(axis=0) - coords.min(axis=0)).max() * 2
     regions, vertices = _voronoi_finite_polygons_2d(vor, radius)
     polys = [Polygon(vertices[r]) for r in regions]
     vor_gdf = gpd.GeoDataFrame(gdf.drop(columns="geometry"), geometry=polys, crs=gdf.crs)
-    xmin, ymin, xmax, ymax = gdf.total_bounds
-    clip = box(xmin - 5000, ymin - 5000, xmax + 5000, ymax + 5000)
+
+    if boundary is not None and len(boundary):
+        clip = boundary.to_crs(gdf.crs).union_all()
+    else:
+        xmin, ymin, xmax, ymax = gdf.total_bounds
+        clip = box(xmin - 5000, ymin - 5000, xmax + 5000, ymax + 5000)
+
     vor_gdf["geometry"] = vor_gdf.geometry.intersection(clip)
+    vor_gdf["area_km2"] = vor_gdf.geometry.to_crs(_equal_area_crs(gdf)).area / 1e6
     return vor_gdf
 
 
+def _equal_area_crs(gdf: gpd.GeoDataFrame) -> str:
+    """CRS equivalente em área para medir células — o EPSG:3857 infla a área com a latitude."""
+    lon, lat = gdf.to_crs(epsg=4326).union_all().centroid.coords[0]
+    return f"+proj=laea +lat_0={lat:.4f} +lon_0={lon:.4f} +datum=WGS84 +units=m +no_defs"
+
+
+def _plot_boundary(ax, boundary: gpd.GeoSeries | None, crs) -> None:
+    """Desenha o contorno da cidade — a silhueta que dá referência geográfica ao mapa."""
+    if boundary is None or not len(boundary):
+        return
+    boundary.to_crs(crs).boundary.plot(
+        ax=ax, color="black", linewidth=1.2, linestyle="--", alpha=0.7, zorder=5
+    )
+
+
 def _choropleth(vor_gdf, gdf, column, title, cmap, exporter, name, config,
-                categorical=False, vcenter=None):
-    """Mapa temático das regiões de influência das antenas."""
+                categorical=False, vcenter=None, boundary=None, log=False):
+    """Mapa temático das regiões de influência das antenas.
+
+    ``log`` serve às grandezas de cauda longa (densidade, volume): numa escala linear, um
+    punhado de regiões centrais satura o topo e o resto da cidade vira um borrão de uma cor só.
+    """
     fig, ax = plt.subplots(figsize=(11, 11))
     kwargs = dict(column=column, cmap=cmap, legend=True, edgecolor="black",
-                  linewidth=0.4, alpha=0.65, ax=ax)
+                  linewidth=0.4, alpha=0.65, ax=ax,
+                  legend_kwds={"shrink": 0.55} if not categorical else None)
     if categorical:
         kwargs["categorical"] = True
+        kwargs.pop("legend_kwds")
+    elif log:
+        values = vor_gdf[column].replace(0, np.nan).dropna()
+        if len(values):
+            kwargs["norm"] = LogNorm(vmin=values.min(), vmax=values.max())
     elif vcenter is not None:
         values = vor_gdf[column].dropna()
         span = max(abs(values.min() - vcenter), abs(values.max() - vcenter)) if len(values) else 1
         kwargs.update(vmin=vcenter - span, vmax=vcenter + span)
     vor_gdf.plot(**kwargs)
     gdf.plot(ax=ax, color="black", markersize=5)
+    _plot_boundary(ax, boundary, gdf.crs)
     _add_basemap(ax, config)
     ax.set_axis_off()
     ax.set_title(title)
@@ -116,7 +157,8 @@ def _choropleth(vor_gdf, gdf, column, title, cmap, exporter, name, config,
 
 
 # --------------------------------------------------------------------------- fluxos
-def _plot_flow_map(flows, gdf, config, exporter, title, name, value="q_calls", color="crimson"):
+def _plot_flow_map(flows, gdf, config, exporter, title, name, value="q_calls",
+                   color="crimson", boundary=None):
     """Desenha os fluxos como linhas entre antenas, com largura proporcional ao volume."""
     xy = gdf.set_index("antenna_id").geometry
     sel = flows[flows["a"].isin(xy.index) & flows["b"].isin(xy.index)].copy()
@@ -129,13 +171,14 @@ def _plot_flow_map(flows, gdf, config, exporter, title, name, value="q_calls", c
     fig, ax = plt.subplots(figsize=(11, 11))
     sel_gdf.plot(ax=ax, color=color, linewidth=lw, alpha=0.45)
     gdf.plot(ax=ax, color="black", markersize=12)
+    _plot_boundary(ax, boundary, gdf.crs)
     _add_basemap(ax, config)
     ax.set_axis_off()
     ax.set_title(title)
     exporter.save_figure(fig, name, "spatial")
 
 
-def _gravity(flows, gdf, config, exporter, city_name) -> dict:
+def _gravity(flows, gdf, config, exporter, city_name, boundary=None) -> dict:
     """Modelo de gravidade e o mapa dos pares que fogem dele."""
     fit = fit_gravity_model(flows)
     if fit is None:
@@ -164,7 +207,7 @@ def _gravity(flows, gdf, config, exporter, city_name) -> dict:
     _plot_flow_map(
         top, gdf, config, exporter,
         f"Ligações acima do previsto pela gravidade — {city_name}",
-        "gravity_residuals", value="residual", color="darkviolet",
+        "gravity_residuals", value="residual", color="darkviolet", boundary=boundary,
     )
     exporter.save_data(
         df.nlargest(min(50, len(df)), "residual")[
@@ -258,6 +301,42 @@ def _homophily(nodes, flows, exporter, city_name, quintile_col="residence_quinti
     }
 
 
+# --------------------------------------------------------------------------- território
+def _boundary_metrics(vor_gdf, boundary, gdf) -> dict:
+    """Quanto território cada região cobre — e a densidade de moradores que isso implica.
+
+    Só faz sentido com o Voronoi recortado por um limite real: sem ele, a área de uma célula
+    de borda é um artefato do retângulo de corte. A densidade separa duas coisas que o
+    ``n_users`` sozinho confunde — uma região com muita gente porque é grande e uma região
+    com muita gente porque é adensada.
+    """
+    if vor_gdf is None or "area_km2" not in vor_gdf.columns:
+        return {}
+
+    area = vor_gdf["area_km2"]
+    metrics = {
+        "boundary_source": "GHS-FUA (GHSL/OECD R2019A)" if boundary is not None else "bbox",
+        "region_area_km2_median": round(float(area.median()), 2),
+        "region_area_km2_min": round(float(area.min()), 2),
+        "region_area_km2_max": round(float(area.max()), 2),
+    }
+
+    if boundary is not None and len(boundary):
+        metrics["city_area_km2"] = round(
+            float(boundary.to_crs(_equal_area_crs(gdf)).union_all().area / 1e6), 1
+        )
+
+    if "n_users" in vor_gdf.columns:
+        dens = np.where(area > 0, vor_gdf["n_users"] / area, np.nan)
+        vor_gdf["users_per_km2"] = dens
+        finite = pd.Series(dens).dropna()
+        if len(finite):
+            metrics["users_per_km2_median"] = round(float(finite.median()), 1)
+            metrics["users_per_km2_max"] = round(float(finite.max()), 1)
+
+    return metrics
+
+
 # --------------------------------------------------------------------------- run
 def run(net, config: dict, exporter, communities=None, nodes: pd.DataFrame | None = None) -> dict:
     """Calcula e exporta os mapas, a gravidade e a homofilia da rede de regiões."""
@@ -271,50 +350,62 @@ def run(net, config: dict, exporter, communities=None, nodes: pd.DataFrame | Non
         logger.warning("[spatial] antenas sem coordenadas — análise espacial pulada")
         return {"metrics": {}}
 
+    # O limite territorial (GHS-FUA) recorta as células e vira o contorno de todos os mapas.
+    boundary = load_boundary(config, crs=gdf.crs)
+
     vor_gdf = None
     if config.get("spatial", {}).get("voronoi", True):
         if len(gdf) >= 4:
             try:
-                vor_gdf = _build_voronoi(gdf)
+                vor_gdf = _build_voronoi(gdf, boundary)
             except Exception as exc:
                 logger.warning("[spatial] Voronoi não construído (%s)", exc)
         else:
             logger.warning("[spatial] poucas antenas (%d) — Voronoi pulado", len(gdf))
 
     metrics: dict = {"n_regions_mapped": int(len(gdf))}
+    metrics.update(_boundary_metrics(vor_gdf, boundary, gdf))
 
     # -------- mapas temáticos das regiões --------
     if vor_gdf is not None:
         _choropleth(vor_gdf, gdf, "residence_quintile_state",
                     f"Regiões por quintil socioeconômico — {city_name}",
-                    "RdYlGn", exporter, "voronoi_quintile", config, categorical=True)
+                    "RdYlGn", exporter, "voronoi_quintile", config, categorical=True,
+                    boundary=boundary)
         _choropleth(vor_gdf, gdf, "insularity",
                     f"Insularidade: fração das chamadas que não sai da região — {city_name}",
-                    "magma_r", exporter, "insularity_map", config)
+                    "magma_r", exporter, "insularity_map", config, boundary=boundary)
         _choropleth(vor_gdf, gdf, "net_balance",
                     f"Balanço emissor (vermelho) × receptor (azul) — {city_name}",
-                    "coolwarm", exporter, "net_balance_map", config, vcenter=0.0)
+                    "coolwarm", exporter, "net_balance_map", config, vcenter=0.0,
+                    boundary=boundary)
         _choropleth(vor_gdf, gdf, "calls_per_user",
                     f"Chamadas por morador — {city_name}",
-                    "viridis", exporter, "calls_per_user_map", config)
+                    "viridis", exporter, "calls_per_user_map", config, boundary=boundary)
+        if "users_per_km2" in vor_gdf.columns:
+            _choropleth(vor_gdf, gdf, "users_per_km2",
+                        f"Densidade: usuários da amostra por km² da região (escala log) — {city_name}",
+                        "YlOrRd", exporter, "user_density_map", config, boundary=boundary, log=True)
         if "macro_region" in vor_gdf.columns and vor_gdf["macro_region"].notna().any():
             _choropleth(vor_gdf, gdf, "macro_region",
                         f"Macro-regiões funcionais detectadas nos fluxos — {city_name}",
-                        "tab10", exporter, "macro_regions_map", config, categorical=True)
+                        "tab10", exporter, "macro_regions_map", config, categorical=True,
+                        boundary=boundary)
 
     # -------- corredores --------
     _plot_flow_map(flows, gdf, config, exporter,
-                   f"Todos os fluxos entre regiões — {city_name}", "flows_all")
+                   f"Todos os fluxos entre regiões — {city_name}", "flows_all",
+                   boundary=boundary)
     backbone_flows = pd.DataFrame(
         [(u, v, d["q_calls"]) for u, v, d in net.backbone.edges(data=True)],
         columns=["a", "b", "q_calls"],
     )
     _plot_flow_map(backbone_flows, gdf, config, exporter,
                    f"Backbone: os corredores estruturantes — {city_name}",
-                   "flows_backbone", color="darkred")
+                   "flows_backbone", color="darkred", boundary=boundary)
 
     # -------- gravidade e decaimento --------
-    metrics.update(_gravity(flows, gdf, config, exporter, city_name))
+    metrics.update(_gravity(flows, gdf, config, exporter, city_name, boundary))
 
     # -------- homofilia socioeconômica --------
     metrics.update(_homophily(nodes, flows, exporter, city_name))
@@ -350,10 +441,19 @@ def run(net, config: dict, exporter, communities=None, nodes: pd.DataFrame | Non
             f"afinidades entre bairros que a geografia não explica."
         )
 
+    territorio_txt = ""
+    if "city_area_km2" in metrics:
+        territorio_txt = (
+            f" O recorte é a área urbana **funcional** da cidade (GHS-FUA), "
+            f"**{metrics['city_area_km2']:,.0f} km²** — e não a divisa administrativa: as antenas da "
+            f"base caem todas dentro dela. A célula mediana tem "
+            f"**{metrics['region_area_km2_median']:.1f} km²**."
+        )
+
     exporter.add_report_section(
         "Espaço, gravidade e segregação",
-        f"Cada uma das **{len(gdf)} regiões** ocupa uma célula de Voronoi do mapa.{gravity_txt} "
-        f"{homo_txt}",
+        f"Cada uma das **{len(gdf)} regiões** ocupa uma célula de Voronoi do mapa.{territorio_txt}"
+        f"{gravity_txt} {homo_txt}",
     )
 
     return {"metrics": metrics}

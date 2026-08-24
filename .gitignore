@@ -6,6 +6,14 @@ dados/residencias.csv
 dados/edges.csv
 dados/*_edges.csv
 dados
+# Limites territoriais: o geopackage global do GHS-FUA (~10 MB, 9.031 áreas do mundo) fica
+# de fora; o que é versionado é o GeoJSON por cidade extraído por scripts/extrair_limite.py.
+limites-cidade/*.gpkg
+limites-cidade/*.gpkg-shm
+limites-cidade/*.gpkg-wal
+limites-cidade/*.zip
+limites-cidade/GHS_FUA_*/
+
 # Python
 __pycache__/
 *.py[cod]

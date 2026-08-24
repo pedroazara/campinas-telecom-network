@@ -111,6 +111,7 @@ Se os parquets por antena ainda não existirem, o módulo de EDA os gera a parti
 ```
 ├── src/
 │   ├── antenna.py            # rede de regiões: nós, fluxos, backbone, gravidade, s-core
+│   ├── boundary.py           # limite territorial (GHS-FUA) que recorta as células de Voronoi
 │   ├── graph_builder.py      # agregação de pares de usuários (insumo da rede de regiões)
 │   ├── exporter.py           # salva figuras, métricas (JSON) e relatório (Markdown)
 │   ├── utils.py              # load_config, logging, criação de pastas
@@ -120,11 +121,16 @@ Se os parquets por antena ainda não existirem, o módulo de EDA os gera a parti
 │       ├── spatial.py        # Voronoi, corredores, gravidade, homofilia, insularidade
 │       └── advanced.py       # robustez ponderada, rich-club, individual vs regional
 ├── scripts/
-│   └── cidades_por_antenas.py  # seleciona cidades pelo nº de antenas
+│   ├── cidades_por_antenas.py  # seleciona cidades pelo nº de antenas
+│   ├── estabilidade_macroregioes.py  # semente, modelo nulo e peso do Louvain
+│   ├── extrair_limite.py       # extrai o limite da cidade do geopackage do GHS-FUA
+│   └── exportar_macroregioes.py  # macro-regiões como polígonos (GeoJSON/GPKG, para QGIS)
 ├── config/                   # default.yaml + um yaml por cidade
 ├── notebooks/                # camada narrativa fina sobre src/ (mesmos números do pipeline)
 ├── dados/                    # parquets de entrada/cache (residencias.csv não versionado)
+├── limites-cidade/           # GeoJSON do limite por cidade (o geopackage global não é versionado)
 ├── output/                   # gerado em runtime (não versionado)
+├── painel.py                 # menu no terminal que roda tudo isso sem digitar comando
 ├── main.py                   # entrypoint CLI
 └── config.py                 # config dos notebooks + load_config das cidades
 ```
@@ -195,5 +201,7 @@ puladas com aviso, sem quebrar a execução.
 - Comparar cidades usando os relatórios por cidade (as métricas agora são comparáveis entre redes de
   tamanhos diferentes, por serem baseadas em peso e não em contagem de nós).
 - Cruzar as macro-regiões funcionais com as divisões administrativas oficiais.
-- Confirmar a abrangência geográfica dos dados (ver o caveat da RMC em [`CLAUDE.md`](CLAUDE.md#8-notas-técnicas-reprodutibilidade)).
+- ~~Confirmar a abrangência geográfica dos dados~~ — resolvido: as 145 antenas caem todas dentro da
+  **área urbana funcional** de Campinas (GHS-FUA), que é também o limite usado para recortar as
+  células de Voronoi. Detalhes em [`CLAUDE.md`](CLAUDE.md#8-notas-técnicas-reprodutibilidade).
 - Incorporar métricas temporais, caso exista base com timestamps das chamadas.
