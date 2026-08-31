@@ -51,29 +51,35 @@ existe de fato. Não é volume de tráfego.
 ## 2. Como o código implementa
 
 ```python
-pares = build_edges_graph(edges_antenna)             # 1 registro por par de usuários conectado
-pares = pares[pares["source"] != pares["target"]]    # i não é contato de i
+pares = build_edges_graph(edges_antenna)[["source", "target"]]  # 1 registro por par de usuários
+pares = pares[pares["source"] != pares["target"]]               # i não é contato de i
 
-la = pares["source"].map(user_antenna).map(posicao)  # antena de cada ponta
-lb = pares["target"].map(user_antenna).map(posicao)
+antena_a = pares["source"].map(user_antenna)   # antena de cada ponta do par
+antena_b = pares["target"].map(user_antenna)
 
-K = np.zeros((n, n), dtype=np.int64)
-np.add.at(K, (la, lb), 1)
-np.add.at(K, (lb, la), 1)
+contagem = pd.crosstab(antena_a, antena_b).reindex(index=antenas, columns=antenas, fill_value=0)
+K = contagem.to_numpy() + contagem.to_numpy().T
 
 u = users.reindex(antenas).to_numpy(dtype=float)
 J = K / np.outer(u, u)
 ```
 
-**Por que somar nas duas posições reproduz a equação (2).** Um par conectado `{i, j}` com `i∈V_l` e
-`j∈V_m` é visto pelos dois extremos: entra uma vez em `k_i(m)` e uma vez em `k_j(l)`.
+`pd.crosstab` conta, para cada dupla de antenas `(l, m)`, quantos pares de usuários têm um extremo
+em `l` e o outro em `m` — uma tabela de contingência direto sobre os rótulos das antenas, sem
+precisar de um dicionário posição↔antena.
 
-- Para `l ≠ m`: `K_lm` e `K_ml` recebem +1 cada. Resultado: `K_lm = K_ml =` número de pares
-  conectados entre as duas antenas — que é o que a soma da equação (2) produz.
+**Por que somar com a transposta reproduz a equação (2).** Um par conectado `{i, j}` com `i∈V_l` e
+`j∈V_m` é visto pelos dois extremos: entra uma vez em `k_i(m)` e uma vez em `k_j(l)`. Como cada par
+aparece uma única vez em `pares` (com um lado fixo em `antena_a`, o outro em `antena_b`), a contagem
+crua só registra a ligação numa direção; somar `contagem` com `contagem.T` cobre a outra:
+
+- Para `l ≠ m`: a célula `(l, m)` de `contagem` mais a célula `(m, l)` de `contagem.T` dá o número
+  de pares conectados entre as duas antenas — o que a soma da equação (2) produz.
 - Para `l = m`: as duas somas caem na mesma célula, dando **+2 por par interno** — exatamente o que
   `Σ_{i∈V_l} k_i(l)` produz, já que cada par interno é contado uma vez por `i` e uma vez por `j`.
 
-Uma regra só cobre os dois casos, sem tratamento especial.
+Uma regra só cobre os dois casos, sem tratamento especial. `pd.crosstab` também descarta pares com
+antena desconhecida (`NaN`) automaticamente, e o `reindex` garante zero para antenas sem contato.
 
 `build_edges_graph` é o passo que garante a semântica de *contato*: ele colapsa as chamadas A→B e
 B→A num único registro por par de pessoas, de modo que cada par entra na contagem uma vez,

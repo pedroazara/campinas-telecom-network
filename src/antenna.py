@@ -428,10 +428,10 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
     **densidade** — a fração dos u_l · u_m pares possíveis que de fato existe — e vive em
     [0, 1], ao contrário do volume bruto de chamadas.
 
-    Como cada par conectado (i∈V_l, j∈V_m) entra uma vez em k_i(m) e uma vez em k_j(l),
-    somamos 1 nas duas posições (l,m) e (m,l). Para l ≠ m isso dá K simétrica com a contagem
-    de pares; para l = m dá o dobro do número de pares internos, que é exatamente o que a
-    definição do paper produz (cada par interno é visto pelos seus dois extremos).
+    Cada par conectado (i∈V_l, j∈V_m) é visto pelos seus dois extremos: entra uma vez em
+    k_i(m) e uma vez em k_j(l). Por isso ``contagem + contagem.T``: para l ≠ m, soma a
+    contagem crua nas duas direções (l,m) e (m,l); para l = m, dobra a contagem — o que é
+    exatamente a definição do paper (cada par interno tem dois extremos, ambos em V_l).
 
     ``diagonal``:
       - ``"paper"``  — literal: K_ll = 2 × pares internos, J_ll = K_ll / u_l².
@@ -446,30 +446,24 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
     if diagonal not in {"paper", "density", "zero"}:
         raise ValueError(f"diagonal deve ser 'paper', 'density' ou 'zero' (recebido: {diagonal!r})")
 
-    antenas = nodes["antenna_id"].to_numpy()
-    posicao = {a: i for i, a in enumerate(antenas)}
-    n = len(antenas)
-
+    antenas = pd.Index(nodes["antenna_id"], name="antenna_id")
     user_antenna = build_user_antenna_map(edges_antenna)
-    pares = build_edges_graph(edges_antenna)  # um registro por par de usuários conectado
 
-    # k_i conta os contatos de i, e uma pessoa não é contato de si mesma: as autochamadas
-    # (mesmo ID nos dois extremos) são artefato do dado e ficam de fora da contagem.
+    # um registro por par de usuários conectado; autochamada (mesmo ID nos dois extremos) é
+    # artefato do dado, e uma pessoa não é contato de si mesma.
+    pares = build_edges_graph(edges_antenna)[["source", "target"]]
     pares = pares[pares["source"] != pares["target"]]
 
-    la = pares["source"].map(user_antenna).map(posicao)
-    lb = pares["target"].map(user_antenna).map(posicao)
-    ok = la.notna() & lb.notna()
-    la = la[ok].to_numpy(dtype=int)
-    lb = lb[ok].to_numpy(dtype=int)
+    antena_a = pares["source"].map(user_antenna)
+    antena_b = pares["target"].map(user_antenna)
 
-    K = np.zeros((n, n), dtype=np.int64)
-    np.add.at(K, (la, lb), 1)
-    np.add.at(K, (lb, la), 1)
+    # quantos pares de usuários ligam cada dupla de antenas; NaN (usuário sem antena conhecida)
+    # é excluído automaticamente pelo crosstab.
+    contagem = pd.crosstab(antena_a, antena_b).reindex(index=antenas, columns=antenas, fill_value=0)
+    K = contagem.to_numpy() + contagem.to_numpy().T
 
-    if users is None:
-        users = nodes.set_index("antenna_id")["n_users"]
-    u = pd.Series(users).reindex(antenas).to_numpy(dtype=float)
+    u = users if users is not None else nodes.set_index("antenna_id")["n_users"]
+    u = pd.Series(u).reindex(antenas).to_numpy(dtype=float)
     denominador = np.outer(u, u)
 
     if diagonal == "density":
@@ -481,10 +475,9 @@ def build_contact_matrix(edges_antenna: pd.DataFrame, nodes: pd.DataFrame,
     with np.errstate(divide="ignore", invalid="ignore"):
         J = np.where(denominador > 0, K / denominador, np.nan)
 
-    rotulos = pd.Index(antenas, name="antenna_id")
     return ContactMatrix(
-        K=pd.DataFrame(K, index=rotulos, columns=rotulos),
-        J=pd.DataFrame(J, index=rotulos, columns=rotulos),
-        users=pd.Series(u, index=rotulos, name="u"),
+        K=pd.DataFrame(K, index=antenas, columns=antenas),
+        J=pd.DataFrame(J, index=antenas, columns=antenas),
+        users=pd.Series(u, index=antenas, name="u"),
         diagonal=diagonal,
     )
